@@ -81,12 +81,10 @@ class DuplicateFinderWizard:
         
         if self.active_media_player:
             self.active_media_player.stop()
-            self.active_media_player = None
-        
-        # --- Dynamic Window Sizing ---
+            self.active_media_player = None        # --- Dynamic Window Sizing ---
         if screen_name in ["results", "final_report"]:
             self.root.geometry("1280x720")
-            self.root.minsize(1024, 768)
+            self.root.minsize(800, 600)  # Increased minimum to accommodate both sections properly
             self.root.resizable(True, True)
         elif screen_name in ["scanning", "deleting"]:
             self.root.geometry("650x200")
@@ -207,21 +205,16 @@ class DuplicateFinderWizard:
         frame = ttk.Frame(self.root)
         header_frame = ttk.Frame(frame)
         header_frame.pack(fill='x', padx=20, pady=10)
-        ttk.Label(header_frame, text="Step 3: Review Duplicates", font=("Helvetica", 16, "bold")).pack(side=tk.LEFT)
+        ttk.Label(header_frame, text="Step 3: Review Duplicates", font=("Helvetica", 16, "bold")).pack(side=tk.LEFT)        # Use PanedWindow for resizable sections
+        paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
+        paned_window.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+          # Left pane for duplicates grid
+        grid_container = ttk.Frame(paned_window)
+        paned_window.add(grid_container, weight=2)  # 2/3 of the space for duplicates
         
-        main_content_frame = ttk.Frame(frame)
-        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-        
-        # Use grid layout with proper weight distribution: 2/3 for duplicates, 1/3 for preview
-        main_content_frame.grid_columnconfigure(0, weight=2) # Results grid gets 2/3 width
-        main_content_frame.grid_columnconfigure(1, weight=1) # Preview gets 1/3 width
-        main_content_frame.grid_rowconfigure(0, weight=1)
-        
-        self.results_preview_pane = self._create_preview_pane(main_content_frame)
-        self.results_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-        
-        grid_container = ttk.Frame(main_content_frame)
-        grid_container.grid(row=0, column=0, sticky='nsew')
+        # Right pane for preview - constrained by the preview pane itself
+        self.results_preview_pane = self._create_preview_pane(paned_window)
+        paned_window.add(self.results_preview_pane['frame'], weight=1)  # 1/3 of the space for preview
 
         results_header = ttk.Frame(grid_container)
         results_header.pack(fill='x', pady=5, padx=5)
@@ -429,10 +422,11 @@ class DuplicateFinderWizard:
     # --- Screen 5: Final Report ---
     def _create_preview_pane(self, parent):
         preview_frame = ttk.LabelFrame(parent, text="Preview")
-        # Remove fixed width to allow responsive sizing
-        # preview_frame.pack_propagate(False)  # Comment out to allow natural sizing
+        # Set smaller constraints to prevent overlap with duplicates area
+        preview_frame.configure(width=255)  # Further reduced width to avoid overlap
+        preview_frame.pack_propagate(False)  # Maintain size constraints
 
-        preview_canvas = tk.Canvas(preview_frame, bg="black")
+        preview_canvas = tk.Canvas(preview_frame, bg="black", width=255, height=200,)
         preview_canvas.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
         
         # Video controls
@@ -462,20 +456,16 @@ class DuplicateFinderWizard:
 
     def create_final_report_screen(self):
         frame = ttk.Frame(self.root)
-        ttk.Label(frame, text="Deletion Complete: Kept Items", font=("Helvetica", 16, "bold")).pack(pady=20)
+        ttk.Label(frame, text="Deletion Complete: Kept Items", font=("Helvetica", 16, "bold")).pack(pady=20)        # Use PanedWindow for resizable sections
+        paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
+        paned_window.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+          # Left pane for kept items grid
+        grid_container = ttk.Frame(paned_window)
+        paned_window.add(grid_container, weight=2)  # 2/3 of the space for kept items
         
-        main_content_frame = ttk.Frame(frame)
-        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-          # Use grid layout with proper weight distribution: 2/3 for duplicates, 1/3 for preview
-        main_content_frame.grid_columnconfigure(0, weight=2) # Grid container gets 2/3 width
-        main_content_frame.grid_columnconfigure(1, weight=1) # Preview gets 1/3 width
-        main_content_frame.grid_rowconfigure(0, weight=1)
-        
-        self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
-        self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(10,0))
-        
-        grid_container = ttk.Frame(main_content_frame)
-        grid_container.grid(row=0, column=0, sticky='nsew')
+        # Right pane for preview - constrained by the preview pane itself
+        self.final_report_preview_pane = self._create_preview_pane(paned_window)
+        paned_window.add(self.final_report_preview_pane['frame'], weight=1)  # 1/3 of the space for preview
         
         self.final_canvas = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
