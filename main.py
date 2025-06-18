@@ -1,239 +1,696 @@
-# main.py
+# main_wizard_gui.py
 import os
-import argparse
-from PIL import Image
+import threading
+import time
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from PIL import Image, ImageTk, ImageSequence
 import imagehash
-import cv2  # OpenCV for video processing
-from tqdm import tqdm # For progress bars
+import cv2
 
 # --- Configuration ---
-# Supported file extensions for images and videos
-IMAGE_EXTENSIONS = [
-    '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.ico'
-]
-VIDEO_EXTENSIONS = [
-    '.mp4', '.avi', 'mkv', '.mov', '.wmv', '.webm', '.m4v', '.flv', 
-    '.mpg', '.mpeg', '.mts'
-]
-# For videos, we sample one frame every N seconds to create a signature.
-# A smaller number is more accurate but much slower. A larger number is faster.
+IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.ico']
+VIDEO_EXTENSIONS = ['.mp4', '.avi', 'mkv', '.mov', '.wmv', '.webm', '.m4v', '.flv', '.mpg', '.mpeg', '.mts']
+THUMBNAIL_SIZE = (128, 128)
+# New preview size to better accommodate widescreen video
+PREVIEW_SIZE = (640, 480)
 VIDEO_FRAME_SAMPLE_RATE_SECONDS = 5
+# Increased width for the preview sidebar
+PREVIEW_PANE_WIDTH = 650 
 
 # --- Core Hashing Functions ---
-
 def get_image_hash(filepath, hash_size=8):
-    """
-    Computes the perceptual hash of an image file.
-    Uses average hashing by default.
-    """
     try:
-        # For GIFs, Pillow opens the first frame by default, which is sufficient for a hash.
         with Image.open(filepath) as img:
-            # Convert to a standard mode like RGB to handle formats like GIFs with palettes.
-            img = img.convert('RGB')
-            return imagehash.average_hash(img, hash_size=hash_size)
-    except Exception as e:
-        # print(f"Warning: Could not process image {filepath}. Reason: {e}")
-        return None
+            return imagehash.average_hash(img.convert('RGB'), hash_size=hash_size)
+    except Exception: return None
 
 def get_video_signature(filepath, hash_size=8):
-    """
-    Creates a signature for a video by hashing a sample of its frames.
-    The signature is a sorted tuple of individual frame hashes.
-    """
     try:
-        video = cv2.VideoCapture(filepath)
-        if not video.isOpened():
-            # print(f"Warning: Could not open video file {filepath}.")
+        cap = cv2.VideoCapture(filepath)
+        if not cap.isOpened(): return None
+        hashes, fps = [], cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps == 0:
+            cap.release()
             return None
-
-        frame_hashes = []
-        fps = video.get(cv2.CAP_PROP_FPS)
-        
-        # Ensure FPS is valid to prevent division by zero
-        if fps is None or fps == 0:
-            # print(f"Warning: Could not read FPS from video {filepath}. Skipping.")
-            return None
-        
-        frame_interval = int(fps * VIDEO_FRAME_SAMPLE_RATE_SECONDS)
-
-        frame_count = 0
-        while video.isOpened():
-            success, frame = video.read()
-            if not success:
-                break
-
-            # Sample the frame at the specified interval
-            if frame_count % frame_interval == 0:
-                # Convert the frame (which is a NumPy array) to a PIL Image
+        interval = int(fps * VIDEO_FRAME_SAMPLE_RATE_SECONDS)
+        if interval == 0: interval = 1
+        count = 0
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret: break
+            if count % interval == 0:
                 try:
-                    pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    frame_hash = imagehash.average_hash(pil_img, hash_size=hash_size)
-                    frame_hashes.append(str(frame_hash))
-                except Exception as e:
-                    # print(f"Warning: Could not process a frame from {filepath}. Reason: {e}")
-                    pass # Continue to the next frame
+                    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    hashes.append(str(imagehash.average_hash(img, hash_size=hash_size)))
+                except Exception: pass
+            count += 1
+        cap.release()
+        if not hashes: return None
+        hashes.sort()
+        return "".join(hashes)
+    except Exception: return None
 
-            frame_count += 1
+# --- Main Application Class (Wizard Style) ---
+class DuplicateFinderWizard:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Duplicate Media Finder Wizard")
+
+        # --- State ---
+        self.current_screen = None
+        self.scan_directories = set()
+        self.duplicate_groups = {}
+        self.kept_files = []
+        self.checkbox_vars = {}
+        self.active_media_player = None
+
+        # --- Screens ---
+        self.screens = {
+            "folder_selection": self.create_folder_selection_screen(),
+            "scanning": self.create_scanning_screen(),
+            "results": self.create_results_screen(),
+            "deleting": self.create_deleting_screen(),
+            "final_report": self.create_final_report_screen(),
+        }
+        self.show_screen("folder_selection")
+
+    def show_screen(self, screen_name):
+        if self.current_screen:
+            self.current_screen.pack_forget()
         
-        video.release()
-
-        if not frame_hashes:
-            return None
+        if self.active_media_player:
+            self.active_media_player.stop()
+            self.active_media_player = None
         
-        # Sort the hashes to make the signature independent of frame order
-        frame_hashes.sort()
-        # Join into a single string to act as a unique key
-        return "".join(frame_hashes)
-
-    except Exception as e:
-        # print(f"Warning: A critical error occurred while processing video {filepath}. Reason: {e}")
-        return None
-
-
-# --- Main Logic ---
-
-def find_duplicates(directories):
-    """
-    Scans directories, hashes all media files, and finds duplicates.
-    """
-    hashes = {} # Dictionary to store hashes and the file paths that match them
-    
-    # 1. Gather all files to be processed
-    filepaths_to_scan = []
-    print("Gathering files to scan...")
-    for directory in directories:
-        if not os.path.isdir(directory):
-            print(f"Warning: '{directory}' is not a valid directory. Skipping.")
-            continue
-        for root, _, files in os.walk(directory):
-            for filename in files:
-                filepaths_to_scan.append(os.path.join(root, filename))
-
-    # 2. Process each file with a progress bar
-    print(f"\nFound {len(filepaths_to_scan)} files. Processing and hashing...")
-    pbar = tqdm(filepaths_to_scan, unit="file")
-    for filepath in pbar:
-        pbar.set_description(f"Processing {os.path.basename(filepath)}")
-        
-        # Get the file extension
-        _, ext = os.path.splitext(filepath)
-        ext = ext.lower()
-
-        media_hash = None
-        if ext in IMAGE_EXTENSIONS:
-            media_hash = get_image_hash(filepath)
-        elif ext in VIDEO_EXTENSIONS:
-            media_hash = get_video_signature(filepath)
-        
-        if media_hash:
-            # If the hash is not yet in our dictionary, add it.
-            if media_hash not in hashes:
-                hashes[media_hash] = []
-            # Append the current file path to the list for this hash.
-            hashes[media_hash].append(filepath)
-    
-    # 3. Filter for duplicates
-    # A duplicate is any hash that has more than one file path associated with it.
-    duplicates = {key: value for key, value in hashes.items() if len(value) > 1}
-    return duplicates
-
-def delete_duplicates(duplicate_groups):
-    """
-    Deletes duplicate files, keeping one original file from each group.
-    """
-    if not duplicate_groups:
-        return # Nothing to do
-
-    print("\n--- Deletion Preview ---")
-    total_to_delete = 0
-    for group_num, (media_hash, filepaths) in enumerate(duplicate_groups.items(), 1):
-        # The first file in the list is kept, the rest are marked for deletion.
-        print(f"Group {group_num}:")
-        print(f"  [KEEPING] {filepaths[0]}")
-        for path_to_delete in filepaths[1:]:
-            print(f"  [DELETING] {path_to_delete}")
-            total_to_delete += 1
-        print("")
-
-    if total_to_delete == 0:
-        print("No files to delete.")
-        return
-
-    print(f"WARNING: You are about to permanently delete {total_to_delete} file(s).")
-    
-    # Ask for user confirmation
-    try:
-        confirm = input("Are you sure you want to proceed? (y/n): ")
-    except EOFError:
-        # This can happen if the script is run in a non-interactive environment
-        print("\nNon-interactive mode detected. Aborting deletion.")
-        return
-        
-    if confirm.lower() != 'y':
-        print("Deletion cancelled by user.")
-        return
-
-    print("\n--- Starting Deletion ---")
-    deleted_count = 0
-    for filepaths in duplicate_groups.values():
-        # The logic is to keep the first file (at index 0) and delete the rest.
-        for file_to_delete in filepaths[1:]:
-            try:
-                os.remove(file_to_delete)
-                print(f"Deleted: {file_to_delete}")
-                deleted_count += 1
-            except OSError as e:
-                print(f"Error deleting {file_to_delete}: {e}")
-    print(f"\nDeletion complete. Successfully deleted {deleted_count} file(s).")
-
-
-def main():
-    """Main function to parse arguments and run the duplicate finder."""
-    parser = argparse.ArgumentParser(
-        description="Finds and optionally deletes duplicate photos and videos based on visual similarity.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    parser.add_argument(
-        '-d', '--directories',
-        nargs='+',  # This allows specifying one or more directories
-        required=True,
-        help="One or more directories to scan for duplicates. \nExample: -d C:\\Users\\User\\Pictures D:\\Videos"
-    )
-    
-    args = parser.parse_args()
-    
-    print("--- Starting Duplicate Media Finder ---")
-    duplicate_groups = find_duplicates(args.directories)
-    
-    print("\n--- Scan Complete ---")
-    
-    if not duplicate_groups:
-        print("No duplicate files found.")
-    else:
-        # First, print the report of found duplicates
-        print(f"Found {len(duplicate_groups)} groups of duplicate files.\n")
-        group_num = 1
-        for media_hash, filepaths in duplicate_groups.items():
-            print(f"--- Group {group_num} ---")
-            for path in filepaths:
-                print(f"  - {path}")
-            print("") # Newline for spacing
-            group_num += 1
-        
-        # Now, ask the user if they want to proceed with deletion
-        print("--------------------------------------------------")
-        try:
-            prompt_delete = input("Would you like to proceed with deleting the duplicate files? (y/n): ")
-        except EOFError:
-            prompt_delete = 'n'
-        
-        if prompt_delete.lower() == 'y':
-            delete_duplicates(duplicate_groups)
+        # --- Dynamic Window Sizing ---
+        if screen_name in ["results", "final_report"]:
+            self.root.geometry("1280x720")
+            self.root.minsize(1024, 768)
+            self.root.resizable(True, True)
+        elif screen_name in ["scanning", "deleting"]:
+            self.root.geometry("650x200")
+            self.root.minsize(650, 200)
+            self.root.resizable(False, False)
         else:
-            print("\nDeletion skipped. No files were changed.")
+            self.root.geometry("600x400")
+            self.root.minsize(600, 350)
+            self.root.resizable(False, False)
             
-    print("\n--- End of Report ---")
+        self.current_screen = self.screens[screen_name]
+        self.current_screen.pack(expand=True, fill=tk.BOTH)
+
+    # --- Screen 1: Folder Selection ---
+    def create_folder_selection_screen(self):
+        frame = ttk.Frame(self.root)
+        
+        header = ttk.Label(frame, text="Step 1: Select Folders to Scan", font=("Helvetica", 16, "bold"))
+        header.pack(pady=20, anchor='center')
+
+        self.list_frame = ttk.LabelFrame(frame, text="Folders to Scan")
+        
+        self.folder_listbox = tk.Listbox(self.list_frame, selectmode=tk.MULTIPLE, bg="#f0f0f0", borderwidth=0, highlightthickness=0)
+        self.folder_scrollbar = ttk.Scrollbar(self.list_frame, orient=tk.VERTICAL, command=self.folder_listbox.yview)
+        self.folder_listbox.config(yscrollcommand=self.folder_scrollbar.set)
+        
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(pady=20, anchor='center')
+        ttk.Button(btn_frame, text="Add Folder...", command=self.add_folder).pack(side=tk.LEFT, padx=10)
+        self.remove_folder_btn = ttk.Button(btn_frame, text="Remove Selected", command=self.remove_folder, state=tk.DISABLED)
+        self.remove_folder_btn.pack(side=tk.LEFT, padx=10)
+        self.start_scan_btn = ttk.Button(btn_frame, text="Start Scan ➤", style="Accent.TButton", command=self.start_scan, state=tk.DISABLED)
+        self.start_scan_btn.pack(side=tk.LEFT, padx=20)
+        
+        return frame
+
+    def add_folder(self):
+        dir_path = filedialog.askdirectory()
+        if dir_path and dir_path not in self.scan_directories:
+            if not self.scan_directories:
+                self.list_frame.pack(pady=10, padx=20, fill='x', before=self.start_scan_btn.master)
+                self.folder_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+                self.folder_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            self.scan_directories.add(dir_path)
+            self.folder_listbox.insert(tk.END, dir_path)
+            self.folder_listbox.config(height=len(self.scan_directories))
+            self.start_scan_btn.config(state=tk.NORMAL)
+            self.remove_folder_btn.config(state=tk.NORMAL)
+
+    def remove_folder(self):
+        selected_indices = self.folder_listbox.curselection()
+        for i in sorted(selected_indices, reverse=True):
+            self.scan_directories.remove(self.folder_listbox.get(i))
+            self.folder_listbox.delete(i)
+        
+        list_size = len(self.scan_directories)
+        self.folder_listbox.config(height=list_size)
+        
+        if list_size == 0:
+            self.list_frame.pack_forget()
+            self.start_scan_btn.config(state=tk.DISABLED)
+            self.remove_folder_btn.config(state=tk.DISABLED)
+
+    def start_scan(self):
+        if not self.scan_directories:
+            messagebox.showwarning("No Folders", "Please add at least one folder to scan.")
+            return
+        self.show_screen("scanning")
+        threading.Thread(target=self.scan_thread, daemon=True).start()
+
+    # --- Screen 2: Scanning ---
+    def create_scanning_screen(self):
+        frame = ttk.Frame(self.root)
+        ttk.Label(frame, text="Step 2: Scanning...", font=("Helvetica", 16, "bold")).pack(pady=50)
+        self.scan_progress_bar = ttk.Progressbar(frame, mode='determinate', length=600)
+        self.scan_progress_bar.pack(pady=10)
+        self.scan_status_label = ttk.Label(frame, text="Gathering files...")
+        self.scan_status_label.pack(pady=5)
+        return frame
+
+    def scan_thread(self):
+        self.duplicate_groups.clear()
+        filepaths = [os.path.join(r, f) for d in self.scan_directories for r, _, fs in os.walk(d) for f in fs]
+        total = len(filepaths)
+        self.scan_progress_bar['maximum'] = total
+        hashes = {}
+        for i, path in enumerate(filepaths):
+            self.root.after(0, lambda p=path, n=i: self.update_scan_status(f"Processing ({n+1}/{total}): {os.path.basename(p)}", n+1))
+            ext = os.path.splitext(path)[1].lower()
+            h = None
+            if ext in IMAGE_EXTENSIONS: h = get_image_hash(path)
+            elif ext in VIDEO_EXTENSIONS: h = get_video_signature(path)
+            if h:
+                if h not in hashes: hashes[h] = []
+                hashes[h].append(path)
+        
+        self.duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
+        for key in self.duplicate_groups:
+            self.duplicate_groups[key].sort()
+        
+        self.root.after(0, self.on_scan_complete)
+
+    def update_scan_status(self, text, value):
+        self.scan_status_label.config(text=text)
+        self.scan_progress_bar['value'] = value
+
+    def on_scan_complete(self):
+        if not self.duplicate_groups:
+            messagebox.showinfo("Scan Complete", "No duplicate files were found.")
+            self.show_screen("folder_selection")
+            return
+        self.build_results_grid()
+        self.show_screen("results")
+
+    # --- Screen 3: Results ---
+    def create_results_screen(self):
+        frame = ttk.Frame(self.root)
+        header_frame = ttk.Frame(frame)
+        header_frame.pack(fill='x', padx=20, pady=10)
+        ttk.Label(header_frame, text="Step 3: Review Duplicates", font=("Helvetica", 16, "bold")).pack(side=tk.LEFT)
+        
+        main_content_frame = ttk.Frame(frame)
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        
+        # Use grid layout for robust resizing and to prevent overlap
+        main_content_frame.grid_columnconfigure(0, weight=1) # Results grid expands
+        main_content_frame.grid_columnconfigure(1, weight=0) # Preview is fixed
+        main_content_frame.grid_rowconfigure(0, weight=1)
+        
+        self.results_preview_pane = self._create_preview_pane(main_content_frame)
+        self.results_preview_pane['frame'].grid(row=0, column=1, sticky='ns', padx=(10, 0))
+        
+        grid_container = ttk.Frame(main_content_frame)
+        grid_container.grid(row=0, column=0, sticky='nsew')
+
+        results_header = ttk.Frame(grid_container)
+        results_header.pack(fill='x', pady=5, padx=5)
+        ttk.Button(results_header, text="Select All Duplicates", command=self.select_all_duplicates).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(results_header, text="Deselect All", command=lambda: self.set_all_checkboxes(0)).pack(side=tk.LEFT)
+        self.results_status_label = ttk.Label(results_header, text=" ", foreground="blue") # Use a space to reserve height
+        self.results_status_label.pack(side=tk.LEFT, padx=20)
+        
+        self.canvas_scroll_frame = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.canvas_scroll_frame.yview)
+        self.results_grid_frame = ttk.Frame(self.canvas_scroll_frame)
+        self.canvas_scroll_frame.create_window((0, 0), window=self.results_grid_frame, anchor="nw")
+        self.canvas_scroll_frame.configure(yscrollcommand=scrollbar.set)
+        
+        self.canvas_scroll_frame.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.results_grid_frame.bind("<Configure>", lambda e: self.canvas_scroll_frame.configure(scrollregion=self.canvas_scroll_frame.bbox("all")))
+        self.canvas_scroll_frame.bind_all("<MouseWheel>", self._on_mousewheel)
+        
+        footer = ttk.Frame(frame)
+        footer.pack(fill='x', pady=20, padx=20)
+        ttk.Button(footer, text="Delete Selected Files 🗑️", style="Accent.TButton", command=self.start_deletion).pack(side=tk.RIGHT)
+        
+        return frame
+        
+    def _on_mousewheel(self, event):
+        active_canvas = None
+        if self.current_screen == self.screens['results']:
+            active_canvas = self.canvas_scroll_frame
+        elif self.current_screen == self.screens['final_report']:
+            active_canvas = self.final_canvas
+
+        if active_canvas and hasattr(active_canvas, 'winfo_containing') and active_canvas.winfo_containing(event.x_root, event.y_root) == active_canvas:
+            active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def build_results_grid(self):
+        # This function is now only for building the grid, not reloading it.
+        # Store thumbnail widgets to prevent reloading
+        self.thumbnail_widgets = {} 
+        for widget in self.results_grid_frame.winfo_children():
+            widget.destroy()
+        self.checkbox_vars.clear()
+
+        # Iterate through groups to create a grouped layout
+        for i, (hash_val, paths) in enumerate(self.duplicate_groups.items()):
+            group_frame = ttk.LabelFrame(self.results_grid_frame, text=f"Group {i+1} ({len(paths)} items)")
+            group_frame.pack(fill='x', expand=True, padx=10, pady=10)
+
+            container_width = group_frame.winfo_width()
+            if container_width <= 1: container_width = self.results_grid_frame.winfo_width()
+            if container_width <= 1: container_width = 800 # Fallback
+            max_cols = max(1, container_width // (THUMBNAIL_SIZE[0] + 20))
+
+            for j, filepath in enumerate(paths):
+                row, col = divmod(j, max_cols)
+                
+                item_frame = ttk.Frame(group_frame, padding=5)
+                item_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
+                
+                var = tk.BooleanVar(value=False)
+                self.checkbox_vars[filepath] = var
+                ttk.Checkbutton(item_frame, variable=var).pack()
+                
+                thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
+                thumb_label.pack(pady=5)
+                thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
+                self.thumbnail_widgets[filepath] = thumb_label # Store reference
+
+                ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0]).pack()
+                threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+
+    def on_thumbnail_click(self, filepath):
+        if self.active_media_player:
+            self.active_media_player.stop()
+            self.active_media_player = None
+
+        preview_widgets = None
+        if self.current_screen == self.screens['results']:
+            preview_widgets = self.results_preview_pane
+        elif self.current_screen == self.screens['final_report']:
+            preview_widgets = self.final_report_preview_pane
+        
+        if not preview_widgets: return
+        
+        preview_widgets['video_controls'].pack_forget()
+        preview_widgets['gif_controls'].pack_forget()
+
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext == '.gif':
+            preview_widgets['gif_controls'].pack(fill='x', pady=5)
+            self.active_media_player = GifPlayer(filepath, preview_widgets['canvas'], preview_widgets['gif_play'])
+        elif ext in VIDEO_EXTENSIONS:
+            preview_widgets['video_controls'].pack(fill='x', pady=5)
+            preview_widgets['seek'].set(0)
+            self.active_media_player = VideoPlayerCV(filepath, preview_widgets)
+        elif ext in IMAGE_EXTENSIONS:
+            self.display_image_preview(filepath, preview_widgets['canvas'])
+
+    def display_image_preview(self, filepath, canvas):
+        try:
+            img = Image.open(filepath)
+            img.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            canvas.delete("all")
+            canvas.create_image(canvas.winfo_width()/2, canvas.winfo_height()/2, anchor='center', image=photo)
+            canvas.image = photo
+        except Exception:
+            canvas.delete("all")
+            canvas.create_text(canvas.winfo_width()/2, canvas.winfo_height()/2, text="Preview not available", fill="red")
+
+    def load_thumbnail(self, filepath, label):
+        try:
+            ext = os.path.splitext(filepath)[1].lower()
+            if ext in IMAGE_EXTENSIONS:
+                img = Image.open(filepath)
+            elif ext in VIDEO_EXTENSIONS:
+                cap = cv2.VideoCapture(filepath)
+                ret, frame = cap.read()
+                cap.release()
+                if not ret: raise Exception("Could not read video frame")
+                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            
+            img.thumbnail(THUMBNAIL_SIZE, Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self.root.after(0, lambda: label.config(image=photo, width=0, height=0))
+            label.image = photo 
+        except Exception:
+            self.root.after(0, lambda: label.config(text="Error", bg="red"))
+
+    def select_all_duplicates(self):
+        # This function no longer reloads thumbnails. It only sets checkbox states.
+        self.set_all_checkboxes(0)
+        self.results_status_label.config(text="Selecting duplicates... (keeping one from each group)")
+        self.root.after(100, self._select_duplicates_worker)
+
+    def _select_duplicates_worker(self):
+        for group in self.duplicate_groups.values():
+            for path in group[1:]:
+                if path in self.checkbox_vars:
+                    self.checkbox_vars[path].set(True)
+        self.root.after(1000, lambda: self.results_status_label.config(text=" "))
+
+    def set_all_checkboxes(self, value):
+        for var in self.checkbox_vars.values():
+            var.set(value)
+
+    def start_deletion(self):
+        self.files_to_delete = [path for path, var in self.checkbox_vars.items() if var.get()]
+        if not self.files_to_delete:
+            messagebox.showwarning("No Selection", "No files selected for deletion.")
+            return
+        
+        if messagebox.askyesno("Confirm Deletion", f"Permanently delete {len(self.files_to_delete)} selected files?"):
+            self.show_screen("deleting")
+            threading.Thread(target=self.delete_thread, daemon=True).start()
+
+    # --- Screen 4: Deleting ---
+    def create_deleting_screen(self):
+        frame = ttk.Frame(self.root)
+        ttk.Label(frame, text="Step 4: Deleting Files...", font=("Helvetica", 16, "bold")).pack(pady=50)
+        self.delete_progress_bar = ttk.Progressbar(frame, mode='determinate', length=600)
+        self.delete_progress_bar.pack(pady=10)
+        self.delete_status_label = ttk.Label(frame, text="Preparing to delete...")
+        self.delete_status_label.pack(pady=5)
+        return frame
+
+    def delete_thread(self):
+        all_files = [p for group in self.duplicate_groups.values() for p in group]
+        self.kept_files = [p for p in all_files if p not in self.files_to_delete]
+
+        total = len(self.files_to_delete)
+        self.delete_progress_bar['maximum'] = total
+        for i, path in enumerate(self.files_to_delete):
+            self.root.after(0, lambda p=path, n=i: self.update_delete_status(f"Deleting ({n+1}/{total}): {os.path.basename(p)}", n+1))
+            try:
+                os.remove(path)
+            except OSError:
+                pass 
+        self.root.after(0, self.on_delete_complete)
+
+    def update_delete_status(self, text, value):
+        self.delete_status_label.config(text=text)
+        self.delete_progress_bar['value'] = value
+
+    def on_delete_complete(self):
+        self.build_final_report_grid()
+        self.show_screen("final_report")
+
+    # --- Screen 5: Final Report ---
+    def _create_preview_pane(self, parent):
+        preview_frame = ttk.LabelFrame(parent, text="Preview", width=PREVIEW_PANE_WIDTH)
+        preview_frame.pack_propagate(False)
+
+        preview_canvas = tk.Canvas(preview_frame, bg="black")
+        preview_canvas.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
+        
+        # Video controls
+        vid_controls = ttk.Frame(preview_frame)
+        vid_play_btn = ttk.Button(vid_controls, text="▶", command=self.toggle_play_pause)
+        vid_time_label = ttk.Label(vid_controls, text="00:00 / 00:00")
+        vid_seek_bar = ttk.Scale(vid_controls, from_=0, to=1000, orient=tk.HORIZONTAL, command=self.seek_video)
+        vid_play_btn.pack(side=tk.LEFT, padx=5)
+        vid_time_label.pack(side=tk.RIGHT, padx=5)
+        vid_seek_bar.pack(side=tk.LEFT, expand=True, fill='x')
+        
+        # GIF controls
+        gif_controls = ttk.Frame(preview_frame)
+        gif_play_btn = ttk.Button(gif_controls, text="❚❚ Pause", command=self.toggle_play_pause)
+        gif_play_btn.pack()
+
+        return {
+            "frame": preview_frame,
+            "canvas": preview_canvas,
+            "video_controls": vid_controls,
+            "gif_controls": gif_controls,
+            "play": vid_play_btn,
+            "seek": vid_seek_bar,
+            "time_label": vid_time_label,
+            "gif_play": gif_play_btn
+        }
+
+    def create_final_report_screen(self):
+        frame = ttk.Frame(self.root)
+        ttk.Label(frame, text="Deletion Complete: Kept Items", font=("Helvetica", 16, "bold")).pack(pady=20)
+        
+        main_content_frame = ttk.Frame(frame)
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        
+        # Use grid layout for robust resizing and to prevent overlap
+        main_content_frame.grid_columnconfigure(0, weight=1) # Grid container expands
+        main_content_frame.grid_columnconfigure(1, weight=0) # Preview is fixed
+        main_content_frame.grid_rowconfigure(0, weight=1)
+        
+        self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
+        self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='ns', padx=(10,0))
+        
+        grid_container = ttk.Frame(main_content_frame)
+        grid_container.grid(row=0, column=0, sticky='nsew')
+        
+        self.final_canvas = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
+        self.final_grid_frame = ttk.Frame(self.final_canvas)
+        self.final_canvas.create_window((0, 0), window=self.final_grid_frame, anchor="nw")
+        self.final_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.final_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.final_grid_frame.bind("<Configure>", lambda e: self.final_canvas.configure(scrollregion=self.final_canvas.bbox("all")))
+        
+        footer = ttk.Frame(frame)
+        footer.pack(fill='x', pady=20, padx=20)
+        ttk.Button(footer, text="Done ✔", style="Accent.TButton", command=self.reset_app).pack(side=tk.RIGHT)
+        
+        return frame
+
+    def build_final_report_grid(self):
+        self.thumbnail_widgets = {} 
+        for widget in self.final_grid_frame.winfo_children():
+            widget.destroy()
+        
+        container_width = self.final_grid_frame.winfo_width()
+        if container_width <= 1: container_width = 800
+        max_cols = max(1, container_width // (THUMBNAIL_SIZE[0] + 20))
+        
+        for i, filepath in enumerate(self.kept_files):
+            row, col = divmod(i, max_cols)
+            item_frame = ttk.Frame(self.final_grid_frame, padding=5)
+            item_frame.grid(row=row, column=col, padx=5, pady=5)
+            thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
+            thumb_label.pack(pady=5)
+            thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
+            self.thumbnail_widgets[filepath] = thumb_label # Store reference
+            ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0]).pack()
+            threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+
+    def reset_app(self):
+        self.scan_directories.clear()
+        self.folder_listbox.delete(0, tk.END)
+        self.list_frame.pack_forget()
+        self.start_scan_btn.config(state=tk.DISABLED)
+        self.remove_folder_btn.config(state=tk.DISABLED)
+        self.show_screen("folder_selection")
+
+    # --- Media Player Controls ---
+    def toggle_play_pause(self):
+        if self.active_media_player: self.active_media_player.toggle_play_pause()
+    def seek_video(self, value):
+        if isinstance(self.active_media_player, VideoPlayerCV): self.active_media_player.seek(float(value))
+            
+    # --- UI Helpers ---
+    def show_transient_message(self, text):
+        self.results_status_label.config(text=text)
+
+    def hide_transient_message(self):
+        self.results_status_label.config(text=" ")
+
+# --- Media Player Classes ---
+class GifPlayer:
+    def __init__(self, filepath, canvas, play_button):
+        self.filepath = filepath
+        self.canvas = canvas
+        self.play_button = play_button
+        self.is_playing = False
+        self.is_stopped = False
+        self.photo_img = None
+        self.thread = None
+        
+        try:
+            self.image = Image.open(filepath)
+            self.frames = []
+            for frame in ImageSequence.Iterator(self.image):
+                duration = frame.info.get('duration', 100) / 1000.0
+                resized_frame = frame.copy()
+                resized_frame.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+                self.frames.append((ImageTk.PhotoImage(resized_frame), duration))
+            self.frame_index = 0
+            self.show_frame()
+        except Exception:
+            self.frames = []
+
+    def show_frame(self):
+        if not self.frames: return
+        photo = self.frames[self.frame_index][0]
+        self.canvas.delete("all")
+        self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, anchor='center', image=photo)
+        
+    def play_loop(self):
+        while not self.is_stopped:
+            if self.is_playing and self.frames:
+                self.frame_index = (self.frame_index + 1) % len(self.frames)
+                photo, delay = self.frames[self.frame_index]
+                self.canvas.after(0, self.show_frame)
+                time.sleep(delay)
+            else:
+                time.sleep(0.1)
+
+    def toggle_play_pause(self):
+        self.is_playing = not self.is_playing
+        if self.is_playing:
+            self.play_button.config(text="❚❚ Pause")
+            if not self.thread or not self.thread.is_alive():
+                self.is_stopped = False
+                self.thread = threading.Thread(target=self.play_loop, daemon=True)
+                self.thread.start()
+        else:
+            self.play_button.config(text="▶ Play")
+
+    def stop(self):
+        self.is_stopped = True
+
+class VideoPlayerCV:
+    def __init__(self, filepath, widgets):
+        self.filepath = filepath
+        self.canvas = widgets['canvas']
+        self.seek_bar = widgets['seek']
+        self.play_button = widgets['play']
+        self.time_label = widgets['time_label']
+        
+        self.cap = cv2.VideoCapture(filepath)
+        self.lock = threading.Lock()
+        self.is_playing = False
+        self.is_stopped = False
+        self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        if self.frame_count > 0: self.seek_bar.config(to=self.frame_count - 1)
+        self.photo_img = None
+        self.thread = None
+        self.update_first_frame()
+
+    def format_time(self, frame_number):
+        if self.fps > 0:
+            total_seconds = frame_number / self.fps
+            minutes = int(total_seconds // 60)
+            seconds = int(total_seconds % 60)
+            return f"{minutes:02d}:{seconds:02d}"
+        return "00:00"
+
+    def update_first_frame(self):
+        with self.lock:
+            ret, frame = self.cap.read()
+        if ret: self.show_frame(frame)
+        with self.lock:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    def show_frame(self, frame):
+        try:
+            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            img.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+            self.photo_img = ImageTk.PhotoImage(img)
+            self.canvas.delete("all")
+            self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, anchor='center', image=self.photo_img)
+        except Exception: pass
+
+    def play_loop(self):
+        delay = 1.0 / self.fps if self.fps > 0 else 0.04
+        while not self.is_stopped:
+            if self.is_playing:
+                with self.lock:
+                    if not self.cap.isOpened(): break
+                    ret, frame = self.cap.read()
+                if not ret:
+                    self.stop()
+                    break
+                self.canvas.after(0, self.show_frame, frame)
+                time.sleep(delay)
+            else:
+                time.sleep(0.1)
+
+    def update_loop(self):
+        if self.is_stopped: return
+        with self.lock:
+            if self.cap.isOpened():
+                current_frame = self.cap.get(cv2.CAP_PROP_POS_FRAMES)
+        
+        self.seek_bar.set(current_frame)
+        total_time_str = self.format_time(self.frame_count)
+        current_time_str = self.format_time(current_frame)
+        self.time_label.config(text=f"{current_time_str} / {total_time_str}")
+        
+        if self.is_playing:
+            self.canvas.after(500, self.update_loop)
+
+    def toggle_play_pause(self):
+        self.is_playing = not self.is_playing
+        if self.is_playing:
+            self.play_button.config(text="❚❚")
+            if not self.thread or not self.thread.is_alive():
+                self.is_stopped = False
+                self.thread = threading.Thread(target=self.play_loop, daemon=True)
+                self.thread.start()
+                self.update_loop()
+        else:
+            self.play_button.config(text="▶")
+
+    def seek(self, frame_num_str):
+        with self.lock:
+            if not self.cap.isOpened(): return
+            frame_num = int(float(frame_num_str))
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+            if not self.is_playing:
+                ret, frame = self.cap.read()
+                if ret: self.canvas.after(0, self.show_frame, frame)
+
+    def stop(self):
+        self.is_stopped = True
+        self.is_playing = False
+        if hasattr(self, 'play_button'): self.play_button.config(text="▶")
+        with self.lock:
+            if self.cap.isOpened(): self.cap.release()
+
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    
+    style = ttk.Style(root)
+    style.theme_use('clam')
+    
+    # Configure standard button style for better visibility on hover
+    style.configure("TButton", padding=6, relief="flat", background="#f0f0f0")
+    style.map("TButton",
+        foreground=[('active', 'black'), ('disabled', 'gray')],
+        background=[('active', '#e0e0e0')]
+    )
+
+    # Configure accent button style
+    style.configure("Accent.TButton", foreground="white", background="#0078D7")
+    style.map("Accent.TButton",
+        background=[('active', '#005a9e')]
+    )
+    
+    app = DuplicateFinderWizard(root)
+    root.mainloop()
