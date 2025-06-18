@@ -285,7 +285,11 @@ class DuplicateFinderWizard:
         elif self.current_screen == self.screens['final_report']:
             active_canvas = self.final_canvas
 
-        if active_canvas and hasattr(active_canvas, 'winfo_containing') and active_canvas.winfo_containing(event.x_root, event.y_root) == active_canvas:
+        # For results screen, allow scrolling anywhere on the page
+        if self.current_screen == self.screens['results'] and active_canvas:
+            active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        # For other screens, check if mouse is over the specific canvas
+        elif active_canvas and hasattr(active_canvas, 'winfo_containing') and active_canvas.winfo_containing(event.x_root, event.y_root) == active_canvas:
             active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def build_results_grid(self):
