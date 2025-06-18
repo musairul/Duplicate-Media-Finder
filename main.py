@@ -87,9 +87,13 @@ class DuplicateFinderWizard:
             self.root.minsize(800, 600)  # Increased minimum to accommodate both sections properly
             self.root.resizable(True, True)
         elif screen_name in ["scanning", "deleting"]:
-            self.root.geometry("650x200")
-            self.root.minsize(650, 200)
+            self.root.geometry("700x220")  # Increased size to show full scanning status
+            self.root.minsize(700, 220)
             self.root.resizable(False, False)
+        elif screen_name == "folder_selection":
+            self.root.geometry("500x150")  # Increased height to show header and buttons properly
+            self.root.minsize(450, 150)
+            self.root.resizable(True, True)  # Allow resizing in case user has many folders
         else:
             self.root.geometry("600x400")
             self.root.minsize(600, 350)
@@ -134,6 +138,8 @@ class DuplicateFinderWizard:
             self.folder_listbox.config(height=len(self.scan_directories))
             self.start_scan_btn.config(state=tk.NORMAL)
             self.remove_folder_btn.config(state=tk.NORMAL)
+              # Resize window to fit content
+            self._resize_folder_selection_window()
 
     def remove_folder(self):
         selected_indices = self.folder_listbox.curselection()
@@ -148,22 +154,46 @@ class DuplicateFinderWizard:
             self.list_frame.pack_forget()
             self.start_scan_btn.config(state=tk.DISABLED)
             self.remove_folder_btn.config(state=tk.DISABLED)
+          # Resize window to fit content
+        self._resize_folder_selection_window()
+
+    def _resize_folder_selection_window(self):
+        """Resize the window to fit the folder list content"""
+        # Update the UI to ensure proper sizing calculations
+        self.root.update_idletasks()
+          # Calculate required height based on content
+        base_height = 150  # Header + button frame + padding (increased from 120)
+        if len(self.scan_directories) > 0:
+            # Add height for the list frame (approximately 20px per item + frame padding)
+            list_height = len(self.scan_directories) * 20 + 60  # 60 for frame and padding
+            total_height = base_height + list_height
+        else:
+            total_height = base_height
+        
+        # Set reasonable bounds
+        min_height = 150  # Increased minimum height
+        max_height = 400  # Don't make it too tall
+        final_height = max(min_height, min(max_height, total_height))
+        
+        # Keep width reasonable
+        width = 500
+        
+        # Apply the new geometry
+        self.root.geometry(f"{width}x{final_height}")
 
     def start_scan(self):
         if not self.scan_directories:
             messagebox.showwarning("No Folders", "Please add at least one folder to scan.")
             return
         self.show_screen("scanning")
-        threading.Thread(target=self.scan_thread, daemon=True).start()
-
-    # --- Screen 2: Scanning ---
+        threading.Thread(target=self.scan_thread, daemon=True).start()    # --- Screen 2: Scanning ---
     def create_scanning_screen(self):
         frame = ttk.Frame(self.root)
-        ttk.Label(frame, text="Step 2: Scanning...", font=("Helvetica", 16, "bold")).pack(pady=50)
-        self.scan_progress_bar = ttk.Progressbar(frame, mode='determinate', length=600)
-        self.scan_progress_bar.pack(pady=10)
-        self.scan_status_label = ttk.Label(frame, text="Gathering files...")
-        self.scan_status_label.pack(pady=5)
+        ttk.Label(frame, text="Step 2: Scanning...", font=("Helvetica", 16, "bold")).pack(pady=30)
+        self.scan_progress_bar = ttk.Progressbar(frame, mode='determinate', length=650)
+        self.scan_progress_bar.pack(pady=15)
+        self.scan_status_label = ttk.Label(frame, text="Gathering files...", wraplength=650, justify='center')
+        self.scan_status_label.pack(pady=10)
         return frame
 
     def scan_thread(self):
@@ -282,11 +312,33 @@ class DuplicateFinderWizard:
                 item_frame = ttk.Frame(group_frame, padding=5)
                 item_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
                 
-                var = tk.BooleanVar(value=False)
-                self.checkbox_vars[filepath] = var
-                ttk.Checkbutton(item_frame, variable=var).pack()
+                is_original = (j == 0)  # First item in each group is the original
                 
-                thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
+                if is_original:
+                    # Original - cannot be selected for deletion
+                    # Don't create a checkbox for originals
+                    
+                    # Add simple "Original" label
+                    original_label = tk.Label(item_frame, text="Original", fg='black', font=('Arial', 9))
+                    original_label.pack(pady=2)
+                    
+                    # Standard thumbnail styling
+                    thumb_bg = 'gray'
+                    thumb_relief = 'raised'
+                    
+                    # Don't add to checkbox_vars since there's no checkbox
+                else:
+                    # Duplicate - can be selected for deletion
+                    var = tk.BooleanVar(value=False)
+                    checkbox = ttk.Checkbutton(item_frame, variable=var)
+                    checkbox.pack()
+                    
+                    thumb_bg = 'gray'
+                    thumb_relief = 'raised'
+                    
+                    self.checkbox_vars[filepath] = var
+                
+                thumb_label = tk.Label(item_frame, bg=thumb_bg, relief=thumb_relief, width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
                 thumb_label.pack(pady=5)
                 thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
                 self.thumbnail_widgets[filepath] = thumb_label # Store reference
@@ -371,7 +423,6 @@ class DuplicateFinderWizard:
     def select_all_duplicates(self):
         # This function no longer reloads thumbnails. It only sets checkbox states.
         self.set_all_checkboxes(0)
-        self.results_status_label.config(text="Selecting duplicates... (keeping one from each group)")
         self.root.after(100, self._select_duplicates_worker)
 
     def _select_duplicates_worker(self):
@@ -379,9 +430,9 @@ class DuplicateFinderWizard:
             for path in group[1:]:
                 if path in self.checkbox_vars:
                     self.checkbox_vars[path].set(True)
-        self.root.after(1000, lambda: self.results_status_label.config(text=" "))
 
     def set_all_checkboxes(self, value):
+        # Only duplicates have checkboxes, originals are excluded from checkbox_vars
         for var in self.checkbox_vars.values():
             var.set(value)
 
