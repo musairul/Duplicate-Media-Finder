@@ -15,8 +15,8 @@ THUMBNAIL_SIZE = (128, 128)
 # New preview size to better accommodate widescreen video
 PREVIEW_SIZE = (640, 480)
 VIDEO_FRAME_SAMPLE_RATE_SECONDS = 5
-# Increased width for the preview sidebar
-PREVIEW_PANE_WIDTH = 650 
+# Preview pane will be calculated as 1/3 of window width
+PREVIEW_PANE_WIDTH = 400  # Base minimum width
 
 # --- Core Hashing Functions ---
 def get_image_hash(filepath, hash_size=8):
@@ -212,13 +212,13 @@ class DuplicateFinderWizard:
         main_content_frame = ttk.Frame(frame)
         main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
         
-        # Use grid layout for robust resizing and to prevent overlap
-        main_content_frame.grid_columnconfigure(0, weight=1) # Results grid expands
-        main_content_frame.grid_columnconfigure(1, weight=0) # Preview is fixed
+        # Use grid layout with proper weight distribution: 2/3 for duplicates, 1/3 for preview
+        main_content_frame.grid_columnconfigure(0, weight=2) # Results grid gets 2/3 width
+        main_content_frame.grid_columnconfigure(1, weight=1) # Preview gets 1/3 width
         main_content_frame.grid_rowconfigure(0, weight=1)
         
         self.results_preview_pane = self._create_preview_pane(main_content_frame)
-        self.results_preview_pane['frame'].grid(row=0, column=1, sticky='ns', padx=(10, 0))
+        self.results_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(10, 0))
         
         grid_container = ttk.Frame(main_content_frame)
         grid_container.grid(row=0, column=0, sticky='nsew')
@@ -323,7 +323,19 @@ class DuplicateFinderWizard:
     def display_image_preview(self, filepath, canvas):
         try:
             img = Image.open(filepath)
-            img.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+            # Get canvas dimensions for responsive sizing
+            canvas.update_idletasks()  # Ensure canvas dimensions are updated
+            canvas_width = canvas.winfo_width()
+            canvas_height = canvas.winfo_height()
+            
+            # Use canvas dimensions if available, otherwise fallback to PREVIEW_SIZE
+            if canvas_width > 1 and canvas_height > 1:
+                # Add some padding to ensure image fits well within canvas
+                max_size = (canvas_width - 20, canvas_height - 20)
+            else:
+                max_size = PREVIEW_SIZE
+                
+            img.thumbnail(max_size, Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             canvas.delete("all")
             canvas.create_image(canvas.winfo_width()/2, canvas.winfo_height()/2, anchor='center', image=photo)
@@ -412,8 +424,9 @@ class DuplicateFinderWizard:
 
     # --- Screen 5: Final Report ---
     def _create_preview_pane(self, parent):
-        preview_frame = ttk.LabelFrame(parent, text="Preview", width=PREVIEW_PANE_WIDTH)
-        preview_frame.pack_propagate(False)
+        preview_frame = ttk.LabelFrame(parent, text="Preview")
+        # Remove fixed width to allow responsive sizing
+        # preview_frame.pack_propagate(False)  # Comment out to allow natural sizing
 
         preview_canvas = tk.Canvas(preview_frame, bg="black")
         preview_canvas.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
@@ -449,14 +462,13 @@ class DuplicateFinderWizard:
         
         main_content_frame = ttk.Frame(frame)
         main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-        
-        # Use grid layout for robust resizing and to prevent overlap
-        main_content_frame.grid_columnconfigure(0, weight=1) # Grid container expands
-        main_content_frame.grid_columnconfigure(1, weight=0) # Preview is fixed
+          # Use grid layout with proper weight distribution: 2/3 for duplicates, 1/3 for preview
+        main_content_frame.grid_columnconfigure(0, weight=2) # Grid container gets 2/3 width
+        main_content_frame.grid_columnconfigure(1, weight=1) # Preview gets 1/3 width
         main_content_frame.grid_rowconfigure(0, weight=1)
         
         self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
-        self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='ns', padx=(10,0))
+        self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(10,0))
         
         grid_container = ttk.Frame(main_content_frame)
         grid_container.grid(row=0, column=0, sticky='nsew')
@@ -535,7 +547,18 @@ class GifPlayer:
             for frame in ImageSequence.Iterator(self.image):
                 duration = frame.info.get('duration', 100) / 1000.0
                 resized_frame = frame.copy()
-                resized_frame.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+                # Get canvas dimensions for responsive sizing
+                canvas.update_idletasks()
+                canvas_width = canvas.winfo_width()
+                canvas_height = canvas.winfo_height()
+                
+                # Use canvas dimensions if available, otherwise fallback to PREVIEW_SIZE
+                if canvas_width > 1 and canvas_height > 1:
+                    max_size = (canvas_width - 20, canvas_height - 20)
+                else:
+                    max_size = PREVIEW_SIZE
+                    
+                resized_frame.thumbnail(max_size, Image.LANCZOS)
                 self.frames.append((ImageTk.PhotoImage(resized_frame), duration))
             self.frame_index = 0
             self.show_frame()
@@ -609,7 +632,18 @@ class VideoPlayerCV:
     def show_frame(self, frame):
         try:
             img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            img.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+            # Get canvas dimensions for responsive sizing
+            self.canvas.update_idletasks()
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            # Use canvas dimensions if available, otherwise fallback to PREVIEW_SIZE
+            if canvas_width > 1 and canvas_height > 1:
+                max_size = (canvas_width - 20, canvas_height - 20)
+            else:
+                max_size = PREVIEW_SIZE
+                
+            img.thumbnail(max_size, Image.LANCZOS)
             self.photo_img = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
             self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, anchor='center', image=self.photo_img)
