@@ -313,10 +313,14 @@ class DuplicateFinderWizard:
         if ext == '.gif':
             preview_widgets['gif_controls'].pack(fill='x', pady=5)
             self.active_media_player = GifPlayer(filepath, preview_widgets['canvas'], preview_widgets['gif_play'])
+            # Autoplay GIF
+            self.active_media_player.toggle_play_pause()
         elif ext in VIDEO_EXTENSIONS:
             preview_widgets['video_controls'].pack(fill='x', pady=5)
             preview_widgets['seek'].set(0)
             self.active_media_player = VideoPlayerCV(filepath, preview_widgets)
+            # Autoplay video
+            self.active_media_player.toggle_play_pause()
         elif ext in IMAGE_EXTENSIONS:
             self.display_image_preview(filepath, preview_widgets['canvas'])
 
