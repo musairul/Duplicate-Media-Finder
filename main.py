@@ -205,16 +205,24 @@ class DuplicateFinderWizard:
         frame = ttk.Frame(self.root)
         header_frame = ttk.Frame(frame)
         header_frame.pack(fill='x', padx=20, pady=10)
-        ttk.Label(header_frame, text="Step 3: Review Duplicates", font=("Helvetica", 16, "bold")).pack(side=tk.LEFT)        # Use PanedWindow for resizable sections
-        paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
-        paned_window.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-          # Left pane for duplicates grid
-        grid_container = ttk.Frame(paned_window)
-        paned_window.add(grid_container, weight=2)  # 2/3 of the space for duplicates
+        ttk.Label(header_frame, text="Step 3: Review Duplicates", font=("Helvetica", 16, "bold")).pack(side=tk.LEFT)
         
-        # Right pane for preview - constrained by the preview pane itself
-        self.results_preview_pane = self._create_preview_pane(paned_window)
-        paned_window.add(self.results_preview_pane['frame'], weight=1)  # 1/3 of the space for preview
+        # Use Frame with grid layout for fixed sections (non-resizable)
+        main_content_frame = ttk.Frame(frame)
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        
+        # Configure grid layout with fixed proportions
+        main_content_frame.grid_columnconfigure(0, weight=2)  # 2/3 for duplicates, min 500px
+        main_content_frame.grid_columnconfigure(1, weight=1)  # Fixed width for preview
+        main_content_frame.grid_rowconfigure(0, weight=1)
+        
+        # Left section for duplicates grid
+        grid_container = ttk.Frame(main_content_frame)
+        grid_container.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        
+        # Right section for preview - fixed width
+        self.results_preview_pane = self._create_preview_pane(main_content_frame)
+        self.results_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
 
         results_header = ttk.Frame(grid_container)
         results_header.pack(fill='x', pady=5, padx=5)
@@ -456,16 +464,24 @@ class DuplicateFinderWizard:
 
     def create_final_report_screen(self):
         frame = ttk.Frame(self.root)
-        ttk.Label(frame, text="Deletion Complete: Kept Items", font=("Helvetica", 16, "bold")).pack(pady=20)        # Use PanedWindow for resizable sections
-        paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
-        paned_window.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-          # Left pane for kept items grid
-        grid_container = ttk.Frame(paned_window)
-        paned_window.add(grid_container, weight=2)  # 2/3 of the space for kept items
+        ttk.Label(frame, text="Deletion Complete: Kept Items", font=("Helvetica", 16, "bold")).pack(pady=20)
         
-        # Right pane for preview - constrained by the preview pane itself
-        self.final_report_preview_pane = self._create_preview_pane(paned_window)
-        paned_window.add(self.final_report_preview_pane['frame'], weight=1)  # 1/3 of the space for preview
+        # Use Frame with grid layout for fixed sections (non-resizable)
+        main_content_frame = ttk.Frame(frame)
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        
+        # Configure grid layout with fixed proportions
+        main_content_frame.grid_columnconfigure(0, weight=2, minsize=500)  # 2/3 for kept items, min 500px
+        main_content_frame.grid_columnconfigure(1, weight=0, minsize=280)  # Fixed width for preview
+        main_content_frame.grid_rowconfigure(0, weight=1)
+        
+        # Left section for kept items grid
+        grid_container = ttk.Frame(main_content_frame)
+        grid_container.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        
+        # Right section for preview - fixed width
+        self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
+        self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
         
         self.final_canvas = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
