@@ -685,7 +685,7 @@ class DuplicateFinderWizard:
         self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
         self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
         
-        self.final_canvas = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
+        self.final_canvas = tk.Canvas(grid_container, bg=style.lookup('TFrame', 'background'), highlightthickness=0)
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
         self.final_grid_frame = ttk.Frame(self.final_canvas)
         self.final_canvas.create_window((0, 0), window=self.final_grid_frame, anchor="nw")
