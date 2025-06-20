@@ -119,9 +119,10 @@ class DuplicateFinderWizard:
         btn_frame.pack(pady=20, anchor='center')
         ttk.Button(btn_frame, text="Add Folder...", command=self.add_folder).pack(side=tk.LEFT, padx=10)
         self.remove_folder_btn = ttk.Button(btn_frame, text="Remove Selected", command=self.remove_folder, state=tk.DISABLED)
-        self.remove_folder_btn.pack(side=tk.LEFT, padx=10)
         self.start_scan_btn = ttk.Button(btn_frame, text="Start Scan ➤", style="Accent.TButton", command=self.start_scan, state=tk.DISABLED)
-        self.start_scan_btn.pack(side=tk.LEFT, padx=20)
+        
+        # Initially hide the remove and scan buttons - they'll be shown when folders are added
+        # Don't pack them initially
         
         return frame
 
@@ -136,10 +137,9 @@ class DuplicateFinderWizard:
             self.scan_directories.add(dir_path)
             self.folder_listbox.insert(tk.END, dir_path)
             self.folder_listbox.config(height=len(self.scan_directories))
-            self.start_scan_btn.config(state=tk.NORMAL)
-            self.remove_folder_btn.config(state=tk.NORMAL)
-              # Resize window to fit content
+            # Resize window to fit content
             self._resize_folder_selection_window()
+            self._update_folder_buttons()
 
     def remove_folder(self):
         selected_indices = self.folder_listbox.curselection()
@@ -152,10 +152,9 @@ class DuplicateFinderWizard:
         
         if list_size == 0:
             self.list_frame.pack_forget()
-            self.start_scan_btn.config(state=tk.DISABLED)
-            self.remove_folder_btn.config(state=tk.DISABLED)
-          # Resize window to fit content
+        # Resize window to fit content
         self._resize_folder_selection_window()
+        self._update_folder_buttons()
 
     def _resize_folder_selection_window(self):
         """Resize the window to fit the folder list content"""
@@ -180,6 +179,19 @@ class DuplicateFinderWizard:
         
         # Apply the new geometry
         self.root.geometry(f"{width}x{final_height}")
+
+    def _update_folder_buttons(self):
+        """Update button visibility based on folder selection"""
+        if self.scan_directories:
+            # Show buttons when folders are selected
+            self.remove_folder_btn.pack(side=tk.LEFT, padx=10)
+            self.start_scan_btn.pack(side=tk.LEFT, padx=20)
+            self.remove_folder_btn.config(state=tk.NORMAL)
+            self.start_scan_btn.config(state=tk.NORMAL)
+        else:
+            # Hide buttons when no folders are selected
+            self.remove_folder_btn.pack_forget()
+            self.start_scan_btn.pack_forget()
 
     def start_scan(self):
         if not self.scan_directories:
@@ -578,8 +590,7 @@ class DuplicateFinderWizard:
         self.scan_directories.clear()
         self.folder_listbox.delete(0, tk.END)
         self.list_frame.pack_forget()
-        self.start_scan_btn.config(state=tk.DISABLED)
-        self.remove_folder_btn.config(state=tk.DISABLED)
+        self._update_folder_buttons()
         self.show_screen("folder_selection")
 
     # --- Media Player Controls ---
