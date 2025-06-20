@@ -4,9 +4,13 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk, ImageSequence
-import imagehash
+
 import cv2
+import imagehash
+import librosa
+import numpy as np
+from moviepy.editor import VideoFileClip
+from PIL import Image, ImageTk, ImageSequence
 
 # --- Configuration ---
 IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.ico']
@@ -50,6 +54,40 @@ def get_video_signature(filepath, hash_size=8):
         hashes.sort()
         return "".join(hashes)
     except Exception: return None
+
+def get_audio_hash(filepath, hash_size=8):
+    """Extracts audio, computes MFCC, and returns an image hash of the MFCC."""
+    temp_audio_file = filepath + ".temp.wav"
+    try:
+        with VideoFileClip(filepath) as video_clip:
+            if video_clip.audio is None:
+                return "no_audio"  # Special hash for videos without audio
+            # Write audio to a temporary file
+            video_clip.audio.write_audiofile(temp_audio_file, codec='pcm_s16le', logger=None)
+
+        # Load audio and compute MFCC from a sample
+        y, sr = librosa.load(temp_audio_file, sr=None)
+        duration = librosa.get_duration(y=y, sr=sr)
+        if duration > 30:
+            start = (duration / 2) - 15
+            y = y[int(start * sr):int((start + 30) * sr)]
+
+        mfcc = librosa.feature.mfcc(y=y, sr=sr)
+        if mfcc.size == 0:
+            return "audio_error"
+
+        # Create an image representation of the MFCC
+        mfcc_norm = (mfcc - np.min(mfcc)) / (np.max(mfcc) - np.min(mfcc))
+        mfcc_img_data = (mfcc_norm * 255).astype(np.uint8)
+        mfcc_img = Image.fromarray(mfcc_img_data, 'L')
+
+        return str(imagehash.average_hash(mfcc_img, hash_size=hash_size))
+    except Exception:
+        return "audio_error"  # Generic hash for any processing error
+    finally:
+        # Clean up the temporary audio file
+        if os.path.exists(temp_audio_file):
+            os.remove(temp_audio_file)
 
 # --- Main Application Class (Wizard Style) ---
 class DuplicateFinderWizard:
@@ -214,17 +252,53 @@ class DuplicateFinderWizard:
         total = len(filepaths)
         self.scan_progress_bar['maximum'] = total
         hashes = {}
+
+        # Step 1: Initial scan for images and visual hash for videos
         for i, path in enumerate(filepaths):
-            self.root.after(0, lambda p=path, n=i: self.update_scan_status(f"Processing ({n+1}/{total}): {os.path.basename(p)}", n+1))
+            self.root.after(0, lambda p=path, n=i: self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", n+1))
             ext = os.path.splitext(path)[1].lower()
             h = None
-            if ext in IMAGE_EXTENSIONS: h = get_image_hash(path)
-            elif ext in VIDEO_EXTENSIONS: h = get_video_signature(path)
+            if ext in IMAGE_EXTENSIONS:
+                h = get_image_hash(path)
+            elif ext in VIDEO_EXTENSIONS:
+                h = get_video_signature(path)
+
             if h:
                 if h not in hashes: hashes[h] = []
                 hashes[h].append(path)
+
+        # Initial duplicate groups based on visual similarity
+        visual_duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
+        final_duplicate_groups = {}
         
-        self.duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
+        # Step 2: Refine video groups with audio hashing
+        group_counter = 0
+        for visual_hash, paths in visual_duplicate_groups.items():
+            is_video_group = any(os.path.splitext(p)[1].lower() in VIDEO_EXTENSIONS for p in paths)
+
+            if is_video_group:
+                audio_groups = {}
+                # Reset progress for audio scanning phase
+                self.scan_progress_bar['maximum'] = len(paths)
+                for i, path in enumerate(paths):
+                    self.root.after(0, lambda p=path, n=i: self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", i+1))
+                    audio_h = get_audio_hash(path)
+                    if audio_h not in audio_groups:
+                        audio_groups[audio_h] = []
+                    audio_groups[audio_h].append(path)
+
+                # Add subgroups that are actual duplicates (more than one item)
+                for audio_hash, audio_paths in audio_groups.items():
+                    if len(audio_paths) > 1:
+                        # Create a unique key for the final group
+                        final_group_key = f"{visual_hash}_{audio_hash}"
+                        final_duplicate_groups[final_group_key] = audio_paths
+            else:
+                # This is an image group, add it directly
+                final_duplicate_groups[visual_hash] = paths
+            group_counter += 1
+            
+        self.duplicate_groups = final_duplicate_groups
         
         # Sort each group by creation date (oldest first) so the original is typically the oldest
         for key in self.duplicate_groups:
