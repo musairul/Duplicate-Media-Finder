@@ -730,7 +730,7 @@ class VideoPlayerCV:
         while not self.is_stopped:
             if self.is_playing:
                 with self.lock:
-                    if not self.cap.isOpened(): break
+                    if not self.ensure_capture_open(): break
                     ret, frame = self.cap.read()
                 if not ret:
                     self.stop()
@@ -742,8 +742,9 @@ class VideoPlayerCV:
 
     def update_loop(self):
         if self.is_stopped: return
+        current_frame = 0  # Initialize with default value
         with self.lock:
-            if self.cap.isOpened():
+            if self.ensure_capture_open():
                 current_frame = self.cap.get(cv2.CAP_PROP_POS_FRAMES)
         
         self.seek_bar.set(current_frame)
@@ -757,6 +758,11 @@ class VideoPlayerCV:
     def toggle_play_pause(self):
         self.is_playing = not self.is_playing
         if self.is_playing:
+            # Ensure capture is open before starting playback
+            with self.lock:
+                if not self.ensure_capture_open():
+                    self.is_playing = False
+                    return
             self.play_button.config(text="❚❚")
             if not self.thread or not self.thread.is_alive():
                 self.is_stopped = False
@@ -768,7 +774,7 @@ class VideoPlayerCV:
 
     def seek(self, frame_num_str):
         with self.lock:
-            if not self.cap.isOpened(): return
+            if not self.ensure_capture_open(): return
             frame_num = int(float(frame_num_str))
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
             if not self.is_playing:
@@ -781,6 +787,14 @@ class VideoPlayerCV:
         if hasattr(self, 'play_button'): self.play_button.config(text="▶")
         with self.lock:
             if self.cap.isOpened(): self.cap.release()
+
+    def ensure_capture_open(self):
+        """Ensure video capture is open, reopen if necessary"""
+        if not self.cap.isOpened():
+            self.cap = cv2.VideoCapture(self.filepath)
+            if not self.cap.isOpened():
+                return False
+        return True
 
 
 if __name__ == "__main__":
