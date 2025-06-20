@@ -7,6 +7,7 @@ import cv2  # OpenCV for video processing
 from tqdm import tqdm # For progress bars
 import librosa
 import numpy as np
+import ffmpeg
 
 # --- Configuration ---
 # Supported file extensions for images and videos
@@ -99,6 +100,22 @@ def get_video_signature(filepath, hash_size=8):
 
 # --- Audio Comparison Functions ---
 
+def video_has_audio_stream(filepath):
+    """
+    Uses ffmpeg-python to check if a video file contains an audio stream.
+    Returns True if audio stream exists, False otherwise.
+    """
+    try:
+        probe = ffmpeg.probe(filepath)
+        streams = probe.get('streams', [])
+        for stream in streams:
+            if stream.get('codec_type') == 'audio':
+                return True
+        return False
+    except Exception as e:
+        print(f"Warning: Could not check audio stream for {filepath}. Reason: {e}")
+        return True  # Assume audio may exist if probe fails
+
 def extract_audio_features(filepath):
     """
     Extracts audio features from a video file for comparison.
@@ -106,7 +123,11 @@ def extract_audio_features(filepath):
     Returns 'NO_AUDIO' string for videos with no audio track.
     """
     import warnings
-    
+
+    # Use ffmpeg-python to check for audio stream first
+    if not video_has_audio_stream(filepath):
+        return 'NO_AUDIO'
+
     # Suppress librosa warnings about PySoundFile and audioread
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=UserWarning, module="librosa")
