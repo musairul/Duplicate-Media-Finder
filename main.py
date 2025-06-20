@@ -225,8 +225,10 @@ class DuplicateFinderWizard:
                 hashes[h].append(path)
         
         self.duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
+        
+        # Sort each group by creation date (oldest first) so the original is typically the oldest
         for key in self.duplicate_groups:
-            self.duplicate_groups[key].sort()
+            self.duplicate_groups[key].sort(key=lambda path: self.get_file_creation_time(path))
         
         self.root.after(0, self.on_scan_complete)
 
@@ -605,6 +607,23 @@ class DuplicateFinderWizard:
 
     def hide_transient_message(self):
         self.results_status_label.config(text=" ")
+
+    def get_file_creation_time(self, filepath):
+        """Get file creation time, fallback to modification time if creation time is not available"""
+        try:
+            # On Windows, st_ctime is creation time; on Unix, it's last metadata change time
+            # st_mtime is modification time on all platforms
+            stat = os.stat(filepath)
+            if os.name == 'nt':  # Windows
+                return stat.st_ctime
+            else:  # Unix-like systems
+                # Use the earlier of creation time (if available) or modification time
+                return min(getattr(stat, 'st_birthtime', stat.st_mtime), stat.st_mtime)
+        except (OSError, AttributeError):
+            # If we can't get the creation time, return a default value (current time)
+            # This ensures the sorting still works even if there are file access issues
+            return time.time()
+
 
 # --- Media Player Classes ---
 class GifPlayer:
