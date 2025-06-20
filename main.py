@@ -672,10 +672,9 @@ class DuplicateFinderWizard:
         # Use Frame with grid layout for fixed sections (non-resizable)
         main_content_frame = ttk.Frame(frame)
         main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-        
-        # Configure grid layout with fixed proportions
-        main_content_frame.grid_columnconfigure(0, weight=2, minsize=500)  # 2/3 for kept items, min 500px
-        main_content_frame.grid_columnconfigure(1, weight=0, minsize=280)  # Fixed width for preview
+          # Configure grid layout with fixed proportions
+        main_content_frame.grid_columnconfigure(0, weight=2)  # 2/3 for kept items
+        main_content_frame.grid_columnconfigure(1, weight=1)  # 1/3 for preview
         main_content_frame.grid_rowconfigure(0, weight=1)
         
         # Left section for kept items grid
@@ -698,7 +697,7 @@ class DuplicateFinderWizard:
         
         footer = ttk.Frame(frame)
         footer.pack(fill='x', pady=20, padx=20)
-        ttk.Button(footer, text="Done ✔", style="Accent.TButton", command=self.reset_app).pack(side=tk.RIGHT)
+        ttk.Button(footer, text="Done ✔", style="Accent.TButton", command=self.close_app).pack(side=tk.RIGHT)
         
         return frame
 
@@ -721,6 +720,13 @@ class DuplicateFinderWizard:
             self.thumbnail_widgets[filepath] = thumb_label # Store reference
             ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0]).pack()
             threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+
+    def close_app(self):
+        """Close the application"""
+        if self.active_media_player:
+            self.active_media_player.stop()
+        self.root.quit()
+        self.root.destroy()
 
     def reset_app(self):
         self.scan_directories.clear()
