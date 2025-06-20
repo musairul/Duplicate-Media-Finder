@@ -125,10 +125,10 @@ class DuplicateFinderWizard:
         if screen_name in ["results", "final_report"]:
             self.root.geometry("1280x720")
             self.root.minsize(800, 600)  # Increased minimum to accommodate both sections properly
-            self.root.resizable(True, True)
+            self.root.resizable(True, True)  # Allow resizing in case user has many folders
         elif screen_name in ["scanning", "deleting"]:
-            self.root.geometry("700x280")  # Increased height to accommodate dual progress bars
-            self.root.minsize(700, 280)
+            self.root.geometry("700x200")  # Reduced height since we only have one progress bar
+            self.root.minsize(700, 200)
             self.root.resizable(False, False)
         elif screen_name == "folder_selection":
             self.root.geometry("500x150")  # Increased height to show header and buttons properly
@@ -228,8 +228,7 @@ class DuplicateFinderWizard:
             self.start_scan_btn.pack(side=tk.LEFT, padx=20)
             self.remove_folder_btn.config(state=tk.NORMAL)
             self.start_scan_btn.config(state=tk.NORMAL)
-        else:
-            # Hide buttons when no folders are selected
+        else:            # Hide buttons when no folders are selected
             self.remove_folder_btn.pack_forget()
             self.start_scan_btn.pack_forget()
 
@@ -238,7 +237,9 @@ class DuplicateFinderWizard:
             messagebox.showwarning("No Folders", "Please add at least one folder to scan.")
             return
         self.show_screen("scanning")
-        threading.Thread(target=self.scan_thread, daemon=True).start()    # --- Screen 2: Scanning ---
+        threading.Thread(target=self.scan_thread, daemon=True).start()
+
+    # --- Screen 2: Scanning ---
     def create_scanning_screen(self):
         frame = ttk.Frame(self.root)
         ttk.Label(frame, text="Step 2: Scanning...", font=("Helvetica", 16, "bold")).pack(pady=20)
@@ -253,16 +254,6 @@ class DuplicateFinderWizard:
         self.scan_overall_progress_bar = ttk.Progressbar(frame, mode='determinate', length=650)
         self.scan_overall_progress_bar.pack(pady=(5, 15))
         
-        # Current file progress section
-        current_label_frame = ttk.Frame(frame)
-        current_label_frame.pack(pady=5)
-        ttk.Label(current_label_frame, text="Current File Progress", font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
-        self.scan_current_percentage = ttk.Label(current_label_frame, text="0%")
-        self.scan_current_percentage.pack(side=tk.RIGHT)
-        
-        self.scan_current_progress_bar = ttk.Progressbar(frame, mode='determinate', length=650)
-        self.scan_current_progress_bar.pack(pady=(5, 15))
-        
         self.scan_status_label = ttk.Label(frame, text="Gathering files...", wraplength=650, justify='center')
         self.scan_status_label.pack(pady=10)
         return frame
@@ -272,41 +263,24 @@ class DuplicateFinderWizard:
         filepaths = [os.path.join(r, f) for d in self.scan_directories for r, _, fs in os.walk(d) for f in fs]
         total = len(filepaths)
         
-        # Initialize progress bars
+        # Initialize progress bar
         self.scan_overall_progress_bar['maximum'] = 100  # Overall progress in percentage
-        self.scan_current_progress_bar['maximum'] = 100  # Current file progress in percentage
-        hashes = {}        # Step 1: Initial scan for images and visual hash for videos (50% of overall progress)
+        hashes = {}
+        
+        # Step 1: Initial scan for images and visual hash for videos (50% of overall progress)
         for i, path in enumerate(filepaths):
             # Show current file starting to be processed
             overall_progress = (i / total) * 50  # First half of overall progress
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                          self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", 0, 0, op))
+                          self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", op))
             
             ext = os.path.splitext(path)[1].lower()
             h = None
             if ext in IMAGE_EXTENSIONS:
-                # Start image processing
-                self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                              self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", 25, 25, op))
                 h = get_image_hash(path)
-                # Complete current file progress
-                self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                              self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", 100, 100, op))
             elif ext in VIDEO_EXTENSIONS:
-                # Start video processing (video processing takes longer)
-                self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                              self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", 10, 10, op))
-                self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                              self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", 50, 50, op))
                 h = get_video_signature(path)
-                # Complete current file progress
-                self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                              self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", 100, 100, op))
-            else:
-                # Non-media file, skip quickly
-                self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                              self.update_scan_status(f"Skipping non-media ({n+1}/{total}): {os.path.basename(p)}", 100, 100, op))
-
+            
             if h:
                 if h not in hashes: hashes[h] = []
                 hashes[h].append(path)
@@ -314,9 +288,7 @@ class DuplicateFinderWizard:
             # Update overall progress after completing this file
             overall_progress = ((i + 1) / total) * 50
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                          self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", 100, 100, op))
-
-        # Initial duplicate groups based on visual similarity
+                          self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", op))        # Initial duplicate groups based on visual similarity
         visual_duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
         final_duplicate_groups = {}
         
@@ -335,20 +307,13 @@ class DuplicateFinderWizard:
                     # Show current file starting to be processed for audio
                     overall_progress = 50 + (processed_video_files / total_video_files) * 50
                     self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                  self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", 0, 0, op))
-                    
-                    # Audio extraction and processing steps
-                    self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                  self.update_scan_status(f"Extracting audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", 25, 25, op))
-                    
-                    self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                  self.update_scan_status(f"Analyzing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", 75, 75, op))
+                                  self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
                     
                     audio_h = get_audio_hash(path)
                     
-                    # Complete current file progress for audio
+                    # Complete audio processing for this file
                     self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                  self.update_scan_status(f"Completed audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", 100, 100, op))
+                                  self.update_scan_status(f"Completed audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
                     
                     if audio_h not in audio_groups:
                         audio_groups[audio_h] = []
@@ -368,19 +333,16 @@ class DuplicateFinderWizard:
             group_counter += 1
             
         self.duplicate_groups = final_duplicate_groups
-        
-        # Sort each group by creation date (oldest first) so the original is typically the oldest
+          # Sort each group by creation date (oldest first) so the original is typically the oldest
         for key in self.duplicate_groups:
             self.duplicate_groups[key].sort(key=lambda path: self.get_file_creation_time(path))
         
         # Set to 100% completion
-        self.root.after(0, lambda: self.update_scan_status("Scan complete!", 100, 100, 100))
+        self.root.after(0, lambda: self.update_scan_status("Scan complete!", 100))
         self.root.after(0, self.on_scan_complete)
 
-    def update_scan_status(self, text, current_value, current_percentage, overall_percentage):
+    def update_scan_status(self, text, overall_percentage):
         self.scan_status_label.config(text=text)
-        self.scan_current_progress_bar['value'] = current_value
-        self.scan_current_percentage.config(text=f"{current_percentage:.1f}%")
         self.scan_overall_progress_bar['value'] = overall_percentage
         self.scan_overall_percentage.config(text=f"{overall_percentage:.1f}%")
 
@@ -610,7 +572,9 @@ class DuplicateFinderWizard:
         
         if messagebox.askyesno("Confirm Deletion", f"Permanently delete {len(self.files_to_delete)} selected files?"):
             self.show_screen("deleting")
-            threading.Thread(target=self.delete_thread, daemon=True).start()    # --- Screen 4: Deleting ---
+            threading.Thread(target=self.delete_thread, daemon=True).start()
+
+    # --- Screen 4: Deleting ---
     def create_deleting_screen(self):
         frame = ttk.Frame(self.root)
         ttk.Label(frame, text="Step 4: Deleting Files...", font=("Helvetica", 16, "bold")).pack(pady=20)
@@ -625,16 +589,6 @@ class DuplicateFinderWizard:
         self.delete_overall_progress_bar = ttk.Progressbar(frame, mode='determinate', length=600)
         self.delete_overall_progress_bar.pack(pady=(5, 15))
         
-        # Current file progress section
-        current_label_frame = ttk.Frame(frame)
-        current_label_frame.pack(pady=5)
-        ttk.Label(current_label_frame, text="Current File Progress", font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
-        self.delete_current_percentage = ttk.Label(current_label_frame, text="0%")
-        self.delete_current_percentage.pack(side=tk.RIGHT)
-        
-        self.delete_current_progress_bar = ttk.Progressbar(frame, mode='determinate', length=600)
-        self.delete_current_progress_bar.pack(pady=(5, 15))
-        
         self.delete_status_label = ttk.Label(frame, text="Preparing to delete...")
         self.delete_status_label.pack(pady=5)
         return frame
@@ -645,37 +599,30 @@ class DuplicateFinderWizard:
 
         total = len(self.files_to_delete)
         self.delete_overall_progress_bar['maximum'] = 100
-        self.delete_current_progress_bar['maximum'] = 100  # Current file progress in percentage
         
         for i, path in enumerate(self.files_to_delete):
             overall_percentage = (i / total) * 100
             
             # Show file starting to be deleted
             self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                          self.update_delete_status(f"Preparing to delete ({n+1}/{total}): {os.path.basename(p)}", 0, 0, op))
-            
-            # Show progress during deletion
-            self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                          self.update_delete_status(f"Deleting ({n+1}/{total}): {os.path.basename(p)}", 50, 50, op))
+                          self.update_delete_status(f"Deleting ({n+1}/{total}): {os.path.basename(p)}", op))
             
             try:
                 os.remove(path)
                 # Show successful deletion
                 overall_percentage = ((i + 1) / total) * 100
                 self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                              self.update_delete_status(f"Deleted ({n+1}/{total}): {os.path.basename(p)}", 100, 100, op))
+                              self.update_delete_status(f"Deleted ({n+1}/{total}): {os.path.basename(p)}", op))
             except OSError:
                 # Show failed deletion (still counts as complete)
                 overall_percentage = ((i + 1) / total) * 100
                 self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                              self.update_delete_status(f"Failed to delete ({n+1}/{total}): {os.path.basename(p)}", 100, 100, op))
+                              self.update_delete_status(f"Failed to delete ({n+1}/{total}): {os.path.basename(p)}", op))
                           
         self.root.after(0, self.on_delete_complete)
 
-    def update_delete_status(self, text, current_value, current_percentage, overall_percentage):
+    def update_delete_status(self, text, overall_percentage):
         self.delete_status_label.config(text=text)
-        self.delete_current_progress_bar['value'] = current_value
-        self.delete_current_percentage.config(text=f"{current_percentage:.1f}%")
         self.delete_overall_progress_bar['value'] = overall_percentage
         self.delete_overall_percentage.config(text=f"{overall_percentage:.1f}%")
 
