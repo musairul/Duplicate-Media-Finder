@@ -22,12 +22,13 @@ A desktop application for finding and removing duplicate images and videos using
 
 ## Usage
 
-1. **Run the executable** - Double-click `DuplicateMediaFinder.exe`
-2. **Add folders** - Select directories containing images/videos to scan
-3. **Configure settings** - Adjust the number of frames to compare for videos (more frames = more accurate but slower)
-4. **Start scan** - The app will analyze all media files and group duplicates
-5. **Review results** - Preview files and select which duplicates to delete
-6. **Delete safely** - The app automatically preserves the original (oldest) file in each group
+1. **Download the program** - Click on [Releases](https://github.com/musairul/Duplicate-Media-Finder/releases) and download the .exe file
+2. **Run the executable** - Double-click `DuplicateMediaFinder.exe`
+3. **Add folders** - Select directories containing images/videos to scan
+4. **Configure settings** - Adjust the number of frames to compare for videos (more frames = more accurate but slower)
+5. **Start scan** - The app will analyze all media files and group duplicates
+6. **Review results** - Preview files and select which duplicates to delete
+7. **Delete safely** - The app automatically preserves the original (oldest) file in each group
 
 ## Technical Details
 
