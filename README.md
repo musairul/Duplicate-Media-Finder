@@ -43,6 +43,12 @@ A powerful desktop application for finding and removing duplicate images and vid
 - **🎯 Smart Frame Selection**: Automatically avoids black/solid color frames for thumbnails
 - **🔄 Dual-stage Process**: Groups by visual similarity first, then refines using audio analysis
 
+## 👾 Source Code
+
+- If you just want to use the app download the .exe file in the Releases tab. 
+- Otherwise, to run the source code, download `uv` for python and run `uv run app.py`. 
+- If you are on macOS/Linux the exe wont work so you will have to run the source code instead.
+
 ## 📄 License
 
 This project is open source. Feel free to modify and distribute.
