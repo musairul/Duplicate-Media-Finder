@@ -18,7 +18,6 @@ VIDEO_EXTENSIONS = ['.mp4', '.avi', 'mkv', '.mov', '.wmv', '.webm', '.m4v', '.fl
 THUMBNAIL_SIZE = (128, 128)
 # New preview size to better accommodate widescreen video
 PREVIEW_SIZE = (640, 480)
-VIDEO_FRAME_SAMPLE_RATE_SECONDS = 5
 # Preview pane will be calculated as 1/3 of window width
 PREVIEW_PANE_WIDTH = 400  # Base minimum width
 
@@ -29,31 +28,56 @@ def get_image_hash(filepath, hash_size=8):
             return imagehash.average_hash(img.convert('RGB'), hash_size=hash_size)
     except Exception: return None
 
-def get_video_signature(filepath, hash_size=8):
+def get_video_signature(filepath, hash_size=8, frames_to_compare=10):
+    """Generate a signature for a video by sampling frames evenly throughout the video"""
     try:
+        # Suppress OpenCV error messages
+        cv2.setLogLevel(0)
+        
         cap = cv2.VideoCapture(filepath)
-        if not cap.isOpened(): return None
-        hashes, fps = [], cap.get(cv2.CAP_PROP_FPS)
-        if not fps or fps == 0:
+        if not cap.isOpened(): 
+            return None
+            
+        # Get total frame count and FPS
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        if total_frames <= 0 or not fps or fps == 0:
             cap.release()
             return None
-        interval = int(fps * VIDEO_FRAME_SAMPLE_RATE_SECONDS)
-        if interval == 0: interval = 1
-        count = 0
-        while cap.isOpened():
+        
+        # If video has fewer frames than requested, use all frames
+        actual_frames_to_sample = min(frames_to_compare, total_frames)
+        
+        # Calculate frame indices to sample evenly throughout the video
+        if actual_frames_to_sample == 1:
+            frame_indices = [total_frames // 2]  # Middle frame
+        else:
+            frame_indices = [int(i * (total_frames - 1) / (actual_frames_to_sample - 1)) 
+                           for i in range(actual_frames_to_sample)]
+        
+        hashes = []
+        for frame_idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
-            if not ret: break
-            if count % interval == 0:
+            if ret:
                 try:
                     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     hashes.append(str(imagehash.average_hash(img, hash_size=hash_size)))
-                except Exception: pass
-            count += 1
+                except Exception:
+                    continue  # Skip corrupted frames
+        
         cap.release()
-        if not hashes: return None
+        
+        if not hashes: 
+            return None
+            
+        # Sort hashes to ensure consistent signatures regardless of frame order
         hashes.sort()
         return "".join(hashes)
-    except Exception: return None
+        
+    except Exception:
+        return None
 
 def get_audio_hash(filepath, hash_size=8):
     """Extracts audio, computes MFCC, and returns an image hash of the MFCC."""
@@ -94,7 +118,7 @@ class DuplicateFinderWizard:
     def __init__(self, root):
         self.root = root
         self.root.title("Duplicate Media Finder Wizard")
-
+        
         # --- State ---
         self.current_screen = None
         self.scan_directories = set()
@@ -102,6 +126,7 @@ class DuplicateFinderWizard:
         self.kept_files = []
         self.checkbox_vars = {}
         self.active_media_player = None
+        self.frames_to_compare = 10  # Default number of frames to compare per video
 
         # --- Screens ---
         self.screens = {
@@ -131,8 +156,8 @@ class DuplicateFinderWizard:
             self.root.minsize(700, 200)
             self.root.resizable(False, False)
         elif screen_name == "folder_selection":
-            self.root.geometry("500x150")  # Increased height to show header and buttons properly
-            self.root.minsize(450, 150)
+            self.root.geometry("500x280")  # Increased height to show header, settings, and buttons properly
+            self.root.minsize(450, 280)
             self.root.resizable(True, True)  # Allow resizing in case user has many folders
         else:
             self.root.geometry("600x400")
@@ -160,6 +185,30 @@ class DuplicateFinderWizard:
         ttk.Button(btn_frame, text="Add Folder...", command=self.add_folder).pack(side=tk.LEFT, padx=10)
         self.remove_folder_btn = ttk.Button(btn_frame, text="Remove Selected", command=self.remove_folder, state=tk.DISABLED)
         self.start_scan_btn = ttk.Button(btn_frame, text="Start Scan ➤", style="Accent.TButton", command=self.start_scan, state=tk.DISABLED)
+        
+        # Video comparison settings frame
+        settings_frame = ttk.LabelFrame(frame, text="Video Comparison Settings")
+        settings_frame.pack(pady=20, padx=20, fill='x')
+        
+        # Frames to compare slider
+        frames_label_frame = ttk.Frame(settings_frame)
+        frames_label_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Label(frames_label_frame, text="Frames to compare per video:", font=("Helvetica", 10)).pack(side=tk.LEFT)
+        self.frames_value_label = ttk.Label(frames_label_frame, text=f"{self.frames_to_compare}", font=("Helvetica", 10, "bold"))
+        self.frames_value_label.pack(side=tk.RIGHT)
+        
+        self.frames_slider = ttk.Scale(settings_frame, from_=3, to=50, orient=tk.HORIZONTAL, 
+                                      command=self.on_frames_slider_change, length=300)
+        self.frames_slider.set(self.frames_to_compare)
+        self.frames_slider.pack(padx=10, pady=(0, 10))
+        
+        # Help text
+        help_text = ttk.Label(settings_frame, 
+                             text="More frames = more accurate detection but slower processing\n"
+                                  "Fewer frames = faster processing but may miss some duplicates",
+                             font=("Helvetica", 9), foreground="gray")
+        help_text.pack(padx=10, pady=(0, 10))
         
         # Initially hide the remove and scan buttons - they'll be shown when folders are added
         # Don't pack them initially
@@ -198,20 +247,19 @@ class DuplicateFinderWizard:
 
     def _resize_folder_selection_window(self):
         """Resize the window to fit the folder list content"""
-        # Update the UI to ensure proper sizing calculations
-        self.root.update_idletasks()
-          # Calculate required height based on content
-        base_height = 150  # Header + button frame + padding (increased from 120)
+        # Update the UI to ensure proper sizing calculations        self.root.update_idletasks()
+        
+        # Calculate required height based on content
+        base_height = 280  # Header + settings frame + button frame + padding (increased to account for slider)
         if len(self.scan_directories) > 0:
             # Add height for the list frame (approximately 20px per item + frame padding)
             list_height = len(self.scan_directories) * 20 + 60  # 60 for frame and padding
             total_height = base_height + list_height
         else:
             total_height = base_height
-        
-        # Set reasonable bounds
-        min_height = 150  # Increased minimum height
-        max_height = 400  # Don't make it too tall
+          # Set reasonable bounds
+        min_height = 280  # Increased minimum height to account for slider
+        max_height = 500  # Don't make it too tall
         final_height = max(min_height, min(max_height, total_height))
         
         # Keep width reasonable
@@ -228,9 +276,15 @@ class DuplicateFinderWizard:
             self.start_scan_btn.pack(side=tk.LEFT, padx=20)
             self.remove_folder_btn.config(state=tk.NORMAL)
             self.start_scan_btn.config(state=tk.NORMAL)
-        else:            # Hide buttons when no folders are selected
+        else:
+            # Hide buttons when no folders are selected
             self.remove_folder_btn.pack_forget()
             self.start_scan_btn.pack_forget()
+
+    def on_frames_slider_change(self, value):
+        """Callback for when the frames slider value changes"""
+        self.frames_to_compare = int(float(value))
+        self.frames_value_label.config(text=f"{self.frames_to_compare}")
 
     def start_scan(self):
         if not self.scan_directories:
@@ -279,7 +333,7 @@ class DuplicateFinderWizard:
             if ext in IMAGE_EXTENSIONS:
                 h = get_image_hash(path)
             elif ext in VIDEO_EXTENSIONS:
-                h = get_video_signature(path)
+                h = get_video_signature(path, frames_to_compare=self.frames_to_compare)
             
             if h:
                 if h not in hashes: hashes[h] = []
@@ -288,7 +342,9 @@ class DuplicateFinderWizard:
             # Update overall progress after completing this file
             overall_progress = ((i + 1) / total) * 50
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                          self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", op))        # Initial duplicate groups based on visual similarity
+                          self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", op))
+        
+        # Initial duplicate groups based on visual similarity
         visual_duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
         final_duplicate_groups = {}
         
@@ -529,23 +585,125 @@ class DuplicateFinderWizard:
             canvas.delete("all")
             canvas.create_text(canvas.winfo_width()/2, canvas.winfo_height()/2, text="Preview not available", fill="red")
 
+    def is_solid_color_image(self, img, threshold=0.85):
+        """
+        Check if an image is mostly a solid color (like all black).
+        Returns True if more than threshold% of pixels are the same color.
+        Optimized for thumbnail-sized images.
+        
+        Args:
+            img: PIL Image object
+            threshold: Float between 0-1. Default 0.85 means 85% of pixels must be same color
+        """
+        try:
+            # Convert to numpy array for faster processing
+            img_array = np.array(img)
+            
+            # For very small images (thumbnails), check all pixels
+            height, width = img_array.shape[:2]
+            total_pixels = height * width
+            
+            # Simple approach: check if image is mostly one color
+            if len(img_array.shape) == 2:  # Grayscale
+                unique_values, counts = np.unique(img_array, return_counts=True)
+                max_count = np.max(counts)
+            else:  # Color image (RGB/RGBA)
+                # Convert to grayscale to simplify detection of "black" or solid colors
+                if img_array.shape[-1] >= 3:  # RGB or RGBA
+                    # Convert to grayscale using standard weights
+                    gray = np.dot(img_array[...,:3], [0.2989, 0.5870, 0.1140])
+                    unique_values, counts = np.unique(gray.astype(np.uint8), return_counts=True)
+                    max_count = np.max(counts)
+                else:
+                    # Single channel, treat as grayscale
+                    unique_values, counts = np.unique(img_array, return_counts=True)
+                    max_count = np.max(counts)
+            
+            # Check if the most common color takes up more than threshold% of the image
+            dominant_ratio = max_count / total_pixels
+            
+            # Additional check: if the most common color is very dark (likely black/near-black)
+            # be more aggressive in detecting it as solid color
+            if len(unique_values) > 0:
+                most_common_idx = np.argmax(counts)
+                most_common_value = unique_values[most_common_idx]
+                
+                # If most common color is very dark (0-30 on 0-255 scale), lower the threshold
+                if most_common_value <= 30:  # Very dark colors
+                    return dominant_ratio > 0.75  # Lower threshold for dark colors
+                else:
+                    return dominant_ratio > threshold
+            
+            return dominant_ratio > threshold
+            
+        except Exception:            # If analysis fails, assume it's not solid color (safer default)
+            return False
+
     def load_thumbnail(self, filepath, label):
         try:
             ext = os.path.splitext(filepath)[1].lower()
             if ext in IMAGE_EXTENSIONS:
                 img = Image.open(filepath)
             elif ext in VIDEO_EXTENSIONS:
+                # Suppress OpenCV error messages
+                cv2.setLogLevel(0)
+                
                 cap = cv2.VideoCapture(filepath)
+                if not cap.isOpened():
+                    raise Exception("Could not open video file")
+                
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                if total_frames <= 0:
+                    cap.release()
+                    raise Exception("Video has no frames")
+                
+                # Try to get the first frame
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = cap.read()
+                if not ret:
+                    cap.release()
+                    raise Exception("Could not read first video frame")
+                
+                # Convert frame to PIL Image for solid color checking
+                first_frame_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                
+                # Check if the first frame is mostly solid color
+                is_solid = self.is_solid_color_image(first_frame_img)
+                
+                if is_solid and total_frames > 1:
+                    # Try multiple positions to find a better frame
+                    frame_positions = [
+                        total_frames // 4,      # 25% into video
+                        total_frames // 2,      # 50% into video  
+                        total_frames * 3 // 4,  # 75% into video
+                    ]
+                    
+                    best_frame = first_frame_img
+                    
+                    for pos in frame_positions:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+                        ret, frame = cap.read()
+                        if ret:
+                            candidate_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                            # Use the first frame that's not solid color
+                            if not self.is_solid_color_image(candidate_img):
+                                best_frame = candidate_img
+                                break
+                    
+                    img = best_frame
+                else:
+                    # First frame is fine, use it
+                    img = first_frame_img
+                
                 cap.release()
-                if not ret: raise Exception("Could not read video frame")
-                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             
             img.thumbnail(THUMBNAIL_SIZE, Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             self.root.after(0, lambda: label.config(image=photo, width=0, height=0))
             label.image = photo 
-        except Exception:
+        except Exception as e:
+            # For debugging, you can uncomment the next line to see errors
+            # print(f"Thumbnail error for {os.path.basename(filepath)}: {e}")
             self.root.after(0, lambda: label.config(text="Error", bg="red"))
 
     def select_all_duplicates(self):
