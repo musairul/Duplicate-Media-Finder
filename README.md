@@ -20,39 +20,6 @@ A desktop application for finding and removing duplicate images and videos using
 ### Videos  
 - MP4, AVI, MKV, MOV, WMV, WebM, M4V, FLV, MPG, MPEG, MTS
 
-## Building the Executable
-
-### Prerequisites
-- Python 3.12 or higher
-- [uv](https://github.com/astral-sh/uv) package manager
-
-### Build Steps
-
-1. **Install dependencies:**
-   ```bash
-   uv sync
-   ```
-
-2. **Build the executable (choose one method):**
-
-   **Option A - Using PowerShell (Recommended):**
-   ```powershell
-   .\build_exe.ps1
-   ```
-
-   **Option B - Using Command Prompt:**
-   ```cmd
-   build_exe.bat
-   ```
-
-   **Option C - Manual build:**
-   ```bash
-   uv run pyinstaller DuplicateMediaFinder.spec
-   ```
-
-3. **Find your executable:**
-   The built executable will be located at `dist\DuplicateMediaFinder.exe`
-
 ## Usage
 
 1. **Run the executable** - Double-click `DuplicateMediaFinder.exe`
@@ -74,33 +41,6 @@ A desktop application for finding and removing duplicate images and videos using
 - **Audio Analysis**: Extracts audio track and generates MFCC-based fingerprint
 - **Smart Frame Selection**: Automatically avoids black/solid color frames for thumbnails
 - **Dual-stage Process**: Groups by visual similarity first, then refines using audio analysis
-
-### Dependencies
-- **OpenCV**: Video frame extraction and processing
-- **Librosa**: Audio analysis and MFCC generation  
-- **MoviePy**: Video/audio file handling
-- **ImageHash**: Perceptual image hashing
-- **Pillow**: Image processing and format support
-- **NumPy**: Numerical operations
-- **Tkinter**: GUI framework
-
-## Performance Tips
-
-- **Fewer frames per video** (3-10): Faster scanning, may miss some duplicates
-- **More frames per video** (20-50): More accurate detection, slower scanning
-- **Large collections**: Consider scanning subfolders separately for better progress tracking
-
-## Troubleshooting
-
-### Build Issues
-- Ensure uv is installed and updated: `uv self update`
-- Check Python version: `python --version` (should be 3.12+)
-- For missing libraries, run: `uv sync --force`
-
-### Runtime Issues
-- **Video codec errors**: Install K-Lite Codec Pack or VLC media player
-- **Large file hangs**: Try reducing frames-to-compare setting
-- **Memory issues**: Close other applications, scan smaller folders
 
 ## License
 
