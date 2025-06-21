@@ -632,7 +632,7 @@ class DuplicateFinderWizard:
 
     # --- Screen 5: Final Report ---
     def _create_preview_pane(self, parent):
-        preview_frame = ttk.LabelFrame(parent, text="Preview")
+        preview_frame = ttk.LabelFrame(parent, text="Preview (no audio)")
         # Set smaller constraints to prevent overlap with duplicates area
         preview_frame.configure(width=255)  # Further reduced width to avoid overlap
         preview_frame.pack_propagate(False)  # Maintain size constraints
