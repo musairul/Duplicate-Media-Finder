@@ -395,7 +395,7 @@ class DuplicateFinderWizard:
     def on_scan_complete(self):
         if not self.duplicate_groups:
             messagebox.showinfo("Scan Complete", "No duplicate files were found.")
-            self.show_screen("folder_selection")
+            self.close_app()
             return
         self.build_results_grid()
         self.show_screen("results")
