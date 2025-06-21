@@ -105,6 +105,9 @@ class DuplicateFinderWizard:
     def __init__(self, root):
         self.root = root
         self.root.title("Duplicate Media Finder Wizard")
+        self.style = ttk.Style()
+        self.bg_colour = self.style.lookup('TFrame', 'background')
+
         
         # --- State ---
         self.current_screen = None
@@ -139,12 +142,12 @@ class DuplicateFinderWizard:
             self.root.minsize(800, 600)  # Increased minimum to accommodate both sections properly
             self.root.resizable(True, True)  # Allow resizing in case user has many folders
         elif screen_name in ["scanning", "deleting"]:
-            self.root.geometry("700x200")  # Reduced height since we only have one progress bar
-            self.root.minsize(700, 200)
+            self.root.geometry("500x200")  # Reduced height since we only have one progress bar
+            self.root.minsize(500, 200)
             self.root.resizable(False, False)
         elif screen_name == "folder_selection":
-            self.root.geometry("500x280")  # Increased height to show header, settings, and buttons properly
-            self.root.minsize(450, 280)
+            self.root.geometry("500x320")  # Increased height to show header, settings, and buttons properly
+            self.root.minsize(450, 320)
             self.root.resizable(True, True)  # Allow resizing in case user has many folders
         else:
             self.root.geometry("600x400")
@@ -237,7 +240,7 @@ class DuplicateFinderWizard:
         # Update the UI to ensure proper sizing calculations        self.root.update_idletasks()
         
         # Calculate required height based on content
-        base_height = 280  # Header + settings frame + button frame + padding (increased to account for slider)
+        base_height = 320  # Header + settings frame + button frame + padding (increased to account for slider)
         if len(self.scan_directories) > 0:
             # Add height for the list frame (approximately 20px per item + frame padding)
             list_height = len(self.scan_directories) * 20 + 60  # 60 for frame and padding
@@ -245,7 +248,7 @@ class DuplicateFinderWizard:
         else:
             total_height = base_height
           # Set reasonable bounds
-        min_height = 280  # Increased minimum height to account for slider
+        min_height = 320  # Increased minimum height to account for slider
         max_height = 500  # Don't make it too tall
         final_height = max(min_height, min(max_height, total_height))
         
@@ -292,10 +295,10 @@ class DuplicateFinderWizard:
         self.scan_overall_percentage = ttk.Label(overall_label_frame, text="0%")
         self.scan_overall_percentage.pack(side=tk.RIGHT)
         
-        self.scan_overall_progress_bar = ttk.Progressbar(frame, mode='determinate', length=650)
+        self.scan_overall_progress_bar = ttk.Progressbar(frame, mode='determinate', length=400)
         self.scan_overall_progress_bar.pack(pady=(5, 15))
         
-        self.scan_status_label = ttk.Label(frame, text="Gathering files...", wraplength=650, justify='center')
+        self.scan_status_label = ttk.Label(frame, text="Gathering files...", wraplength=450, justify='center')
         self.scan_status_label.pack(pady=10)
         return frame
 
@@ -428,7 +431,7 @@ class DuplicateFinderWizard:
         self.results_status_label = ttk.Label(results_header, text=" ", foreground="blue") # Use a space to reserve height
         self.results_status_label.pack(side=tk.LEFT, padx=20)
         
-        self.canvas_scroll_frame = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
+        self.canvas_scroll_frame = tk.Canvas(grid_container, bg=self.bg_colour, highlightthickness=0)
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.canvas_scroll_frame.yview)
         self.results_grid_frame = ttk.Frame(self.canvas_scroll_frame)
         self.canvas_scroll_frame.create_window((0, 0), window=self.results_grid_frame, anchor="nw")
@@ -830,7 +833,7 @@ class DuplicateFinderWizard:
         self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
         self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
         
-        self.final_canvas = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
+        self.final_canvas = tk.Canvas(grid_container, bg=self.bg_colour, highlightthickness=0)
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
         self.final_grid_frame = ttk.Frame(self.final_canvas)
         self.final_canvas.create_window((0, 0), window=self.final_grid_frame, anchor="nw")
