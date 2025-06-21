@@ -1,13 +1,17 @@
 [project]
 name = "img-video-dup-finder"
 version = "0.1.0"
-description = "Add your description here"
+description = "Duplicate Media Finder - Find and remove duplicate images and videos"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 dependencies = [
     "imagehash>=4.3.2",
     "moviepy==1.0.3",
-    "numpy>=2.3.0",
-    "opencv-python>=4.11.0.86",
-    "pillow>=11.2.1",
+    "numpy>=1.21.0",
+    "opencv-python>=4.8.0",
+    "pillow>=9.0.0",
+    "pyinstaller>=6.0.0",
 ]
+
+[project.scripts]
+duplicate-finder = "app:main"

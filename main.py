@@ -7,7 +7,6 @@ from tkinter import ttk, messagebox, filedialog
 
 import cv2
 import imagehash
-import librosa
 import numpy as np
 from moviepy.editor import VideoFileClip
 from PIL import Image, ImageTk, ImageSequence
@@ -80,38 +79,26 @@ def get_video_signature(filepath, hash_size=8, frames_to_compare=10):
         return None
 
 def get_audio_hash(filepath, hash_size=8):
-    """Extracts audio, computes MFCC, and returns an image hash of the MFCC."""
-    temp_audio_file = filepath + ".temp.wav"
+    """Extracts audio properties and returns a simple hash based on duration and basic characteristics."""
     try:
         with VideoFileClip(filepath) as video_clip:
             if video_clip.audio is None:
                 return "no_audio"  # Special hash for videos without audio
-            # Write audio to a temporary file
-            video_clip.audio.write_audiofile(temp_audio_file, codec='pcm_s16le', logger=None)
-
-        # Load audio and compute MFCC from a sample
-        y, sr = librosa.load(temp_audio_file, sr=None)
-        duration = librosa.get_duration(y=y, sr=sr)
-        if duration > 30:
-            start = (duration / 2) - 15
-            y = y[int(start * sr):int((start + 30) * sr)]
-
-        mfcc = librosa.feature.mfcc(y=y, sr=sr)
-        if mfcc.size == 0:
-            return "audio_error"
-
-        # Create an image representation of the MFCC
-        mfcc_norm = (mfcc - np.min(mfcc)) / (np.max(mfcc) - np.min(mfcc))
-        mfcc_img_data = (mfcc_norm * 255).astype(np.uint8)
-        mfcc_img = Image.fromarray(mfcc_img_data, 'L')
-
-        return str(imagehash.average_hash(mfcc_img, hash_size=hash_size))
+            
+            # Get basic audio properties
+            duration = video_clip.audio.duration
+            fps = video_clip.audio.fps if hasattr(video_clip.audio, 'fps') else 44100
+            
+            # Create a simple hash based on duration and basic properties
+            # This is less sophisticated than MFCC but avoids heavy dependencies
+            audio_signature = f"{int(duration)}_{int(fps)}_{video_clip.audio.nchannels if hasattr(video_clip.audio, 'nchannels') else 2}"
+            
+            # Convert to a numeric hash for consistency
+            hash_value = hash(audio_signature) % (10**8)  # Keep it as a reasonable size number
+            return str(hash_value)
+            
     except Exception:
         return "audio_error"  # Generic hash for any processing error
-    finally:
-        # Clean up the temporary audio file
-        if os.path.exists(temp_audio_file):
-            os.remove(temp_audio_file)
 
 # --- Main Application Class (Wizard Style) ---
 class DuplicateFinderWizard:
@@ -843,7 +830,7 @@ class DuplicateFinderWizard:
         self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
         self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
         
-        self.final_canvas = tk.Canvas(grid_container, bg=style.lookup('TFrame', 'background'), highlightthickness=0)
+        self.final_canvas = tk.Canvas(grid_container, bg="#f0f0f0", highlightthickness=0)
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
         self.final_grid_frame = ttk.Frame(self.final_canvas)
         self.final_canvas.create_window((0, 0), window=self.final_grid_frame, anchor="nw")
@@ -1097,7 +1084,6 @@ class VideoPlayerCV:
             if not self.is_playing:
                 ret, frame = self.cap.read()
                 if ret: self.canvas.after(0, self.show_frame, frame)
-
     def stop(self):
         self.is_stopped = True
         self.is_playing = False
@@ -1112,26 +1098,3 @@ class VideoPlayerCV:
             if not self.cap.isOpened():
                 return False
         return True
-
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    
-    style = ttk.Style(root)
-    style.theme_use('clam')
-    
-    # Configure standard button style for better visibility on hover
-    style.configure("TButton", padding=6, relief="flat", background="#f0f0f0")
-    style.map("TButton",
-        foreground=[('active', 'black'), ('disabled', 'gray')],
-        background=[('active', '#e0e0e0')]
-    )
-
-    # Configure accent button style
-    style.configure("Accent.TButton", foreground="white", background="#0078D7")
-    style.map("Accent.TButton",
-        background=[('active', '#005a9e')]
-    )
-    
-    app = DuplicateFinderWizard(root)
-    root.mainloop()
