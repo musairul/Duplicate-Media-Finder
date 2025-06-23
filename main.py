@@ -18,7 +18,7 @@ THUMBNAIL_SIZE = (128, 128)
 # New preview size to better accommodate widescreen video
 PREVIEW_SIZE = (640, 480)
 # Preview pane will be calculated as 1/3 of window width
-PREVIEW_PANE_WIDTH = 400  # Base minimum width
+PREVIEW_PANE_WIDTH = 350  # Base minimum width
 
 # --- Core Hashing Functions ---
 def get_image_hash(filepath, hash_size=8):
@@ -414,7 +414,7 @@ class DuplicateFinderWizard:
         self.scan_status_label.pack(pady=10)
         
         # Audio issues counter
-        self.scan_audio_issues_label = ttk.Label(frame, text="", foreground="orange", font=("Helvetica", 9))
+        self.scan_audio_issues_label = ttk.Label(frame, text="", foreground="red", font=("Helvetica", 9))
         self.scan_audio_issues_label.pack(pady=5)
         
         return frame
@@ -952,13 +952,14 @@ class DuplicateFinderWizard:
         self.show_screen("final_report")
 
     # --- Screen 5: Final Report ---
+    
     def _create_preview_pane(self, parent):
         preview_frame = ttk.LabelFrame(parent, text="Preview (no audio)")
-        # Set smaller constraints to prevent overlap with duplicates area
-        preview_frame.configure(width=255)  # Further reduced width to avoid overlap
+        # Set minimum width constraint
+        preview_frame.configure(width=PREVIEW_PANE_WIDTH)
         preview_frame.pack_propagate(False)  # Maintain size constraints
 
-        preview_canvas = tk.Canvas(preview_frame, bg="black", width=255, height=200,)
+        preview_canvas = tk.Canvas(preview_frame, bg="black", width=PREVIEW_PANE_WIDTH, height=200,)
         preview_canvas.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
         
         # Video controls
