@@ -428,11 +428,10 @@ class DuplicateFinderWizard:
         # Initialize progress bar
         self.scan_overall_progress_bar['maximum'] = 100  # Overall progress in percentage
         hashes = {}
-        
-        # Step 1: Initial scan for images and visual hash for videos (50% of overall progress)
+          # Step 1: Initial scan for images and visual hash for videos (75% of overall progress)
         for i, path in enumerate(filepaths):
             # Show current file starting to be processed
-            overall_progress = (i / total) * 50  # First half of overall progress
+            overall_progress = (i / total) * 75  # First 75% of overall progress
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
                           self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", op))
             
@@ -448,15 +447,14 @@ class DuplicateFinderWizard:
                 hashes[h].append(path)
             
             # Update overall progress after completing this file
-            overall_progress = ((i + 1) / total) * 50
+            overall_progress = ((i + 1) / total) * 75
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
                           self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", op))
         
         # Initial duplicate groups based on visual similarity
         visual_duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
         final_duplicate_groups = {}
-        
-        # Step 2: Refine video groups with audio hashing (remaining 50% of overall progress)
+          # Step 2: Refine video groups with audio hashing (remaining 25% of overall progress)
         group_counter = 0
         total_video_files = sum(len(paths) for paths in visual_duplicate_groups.values() 
                                if any(os.path.splitext(p)[1].lower() in VIDEO_EXTENSIONS for p in paths))
@@ -469,7 +467,7 @@ class DuplicateFinderWizard:
                 audio_groups = {}
                 for i, path in enumerate(paths):
                     # Show current file starting to be processed for audio
-                    overall_progress = 50 + (processed_video_files / total_video_files) * 50
+                    overall_progress = 75 + (processed_video_files / total_video_files) * 25
                     self.root.after(0, lambda p=path, n=i, op=overall_progress: 
                                   self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
                     
