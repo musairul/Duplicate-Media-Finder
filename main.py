@@ -612,6 +612,9 @@ class DuplicateFinderWizard:
         # For results screen, allow scrolling anywhere on the page
         if self.current_screen == self.screens['results'] and active_canvas:
             active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        # For final report screen, also allow scrolling anywhere on the page
+        elif self.current_screen == self.screens['final_report'] and active_canvas:
+            active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         # For other screens, check if mouse is over the specific canvas
         elif active_canvas and hasattr(active_canvas, 'winfo_containing') and active_canvas.winfo_containing(event.x_root, event.y_root) == active_canvas:
             active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
