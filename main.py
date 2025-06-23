@@ -79,26 +79,138 @@ def get_video_signature(filepath, hash_size=8, frames_to_compare=10):
         return None
 
 def get_audio_hash(filepath, hash_size=8):
-    """Extracts audio properties and returns a simple hash based on duration and basic characteristics."""
+    """Extracts audio properties and returns a tuple of (hash, issue_description).
+    issue_description is None if no issues, otherwise describes the fallback used."""
+    import threading
+    import queue
+    
+    def load_video_clip(filepath, result_queue):
+        """Load VideoFileClip in a separate thread"""
+        try:
+            print(f"[DEBUG] Thread: Attempting to load VideoFileClip...")
+            with VideoFileClip(filepath) as video_clip:
+                print(f"[DEBUG] Thread: Video clip loaded successfully")
+                print(f"[DEBUG] Thread: Video duration: {video_clip.duration}")
+                print(f"[DEBUG] Thread: Video fps: {video_clip.fps}")
+                
+                if video_clip.audio is None:
+                    print(f"[DEBUG] Thread: No audio track found in video")
+                    result_queue.put(("success", "no_audio", None))  # No issue for missing audio
+                    return
+                
+                print(f"[DEBUG] Thread: Audio track found")
+                
+                # Get basic audio properties
+                try:
+                    duration = video_clip.audio.duration
+                    print(f"[DEBUG] Thread: Audio duration: {duration}")
+                except Exception as e:
+                    print(f"[DEBUG] Thread: Error getting audio duration: {e}")
+                    duration = 0
+                
+                try:
+                    fps = video_clip.audio.fps if hasattr(video_clip.audio, 'fps') else 44100
+                    print(f"[DEBUG] Thread: Audio fps: {fps}")
+                except Exception as e:
+                    print(f"[DEBUG] Thread: Error getting audio fps: {e}")
+                    fps = 44100
+                    
+                try:
+                    nchannels = video_clip.audio.nchannels if hasattr(video_clip.audio, 'nchannels') else 2
+                    print(f"[DEBUG] Thread: Audio channels: {nchannels}")
+                except Exception as e:
+                    print(f"[DEBUG] Thread: Error getting audio channels: {e}")
+                    nchannels = 2
+                
+                # Create a simple hash based on duration and basic properties
+                audio_signature = f"{int(duration)}_{int(fps)}_{nchannels}"
+                print(f"[DEBUG] Thread: Audio signature: {audio_signature}")
+                
+                # Convert to a numeric hash for consistency
+                hash_value = hash(audio_signature) % (10**8)
+                print(f"[DEBUG] Thread: Generated hash: {hash_value}")
+                result_queue.put(("success", str(hash_value), None))
+                
+        except Exception as e:
+            print(f"[DEBUG] Thread: Exception during VideoFileClip processing: {type(e).__name__}: {e}")
+            result_queue.put(("error", str(e), f"MoviePy error: {type(e).__name__}"))
+    
     try:
-        with VideoFileClip(filepath) as video_clip:
-            if video_clip.audio is None:
-                return "no_audio"  # Special hash for videos without audio
+        print(f"[DEBUG] Processing audio for: {os.path.basename(filepath)}")
+        
+        # Create a queue for thread communication
+        result_queue = queue.Queue()
+        
+        # Start the video loading in a separate thread
+        thread = threading.Thread(target=load_video_clip, args=(filepath, result_queue), daemon=True)
+        thread.start()
+          # Wait for the thread with a timeout
+        thread.join(timeout=10)  # 10 second timeout
+        
+        if thread.is_alive():
+            print(f"[DEBUG] VideoFileClip loading timed out after 30 seconds")
+            # Thread is still running, we'll abandon it and use fallback
             
-            # Get basic audio properties
-            duration = video_clip.audio.duration
-            fps = video_clip.audio.fps if hasattr(video_clip.audio, 'fps') else 44100
+            # Try alternative approach using OpenCV for basic file info
+            print(f"[DEBUG] Attempting fallback with OpenCV...")
+            try:
+                cap = cv2.VideoCapture(filepath)
+                if cap.isOpened():
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    duration = frame_count / fps if fps > 0 else 0
+                    cap.release()
+                    
+                    # Create a basic signature from video properties
+                    fallback_signature = f"fallback_{int(duration)}_{int(fps)}_unknown"
+                    fallback_hash = hash(fallback_signature) % (10**8)
+                    print(f"[DEBUG] Fallback signature: {fallback_signature}")
+                    print(f"[DEBUG] Fallback hash: {fallback_hash}")
+                    return str(fallback_hash), "Failed to process audio"
+                else:
+                    print(f"[DEBUG] OpenCV fallback also failed")
+                    return "opencv_error", "Failed to process audio - OpenCV error"
+            except Exception as cv_exception:
+                print(f"[DEBUG] OpenCV fallback exception: {type(cv_exception).__name__}: {cv_exception}")
+                return "fallback_error", "Failed to process audio - fallback error"
+        else:
+            # Thread completed, get the result
+            try:
+                status, result, issue = result_queue.get_nowait()
+                if status == "success":
+                    print(f"[DEBUG] Successfully got result: {result}")
+                    return result, issue
+                else:
+                    print(f"[DEBUG] Thread returned error: {result}")
+                    # Fall back to OpenCV approach
+                    print(f"[DEBUG] Attempting fallback with OpenCV...")
+                    try:
+                        cap = cv2.VideoCapture(filepath)
+                        if cap.isOpened():
+                            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                            fps = cap.get(cv2.CAP_PROP_FPS)
+                            duration = frame_count / fps if fps > 0 else 0
+                            cap.release()
+                            
+                            fallback_signature = f"fallback_{int(duration)}_{int(fps)}_unknown"
+                            fallback_hash = hash(fallback_signature) % (10**8)
+                            print(f"[DEBUG] Fallback signature: {fallback_signature}")
+                            print(f"[DEBUG] Fallback hash: {fallback_hash}")
+                            return str(fallback_hash), f"Audio processing failed - used video metadata fallback ({issue})"
+                        else:
+                            return "opencv_error", "Failed to process audio - OpenCV error"
+                    except Exception:
+                        return "fallback_error", "Failed to process audio - fallback error"
+            except queue.Empty:
+                print(f"[DEBUG] Thread completed but no result available")
+                return "thread_error", "Audio processing failed - no result available"
             
-            # Create a simple hash based on duration and basic properties
-            # This is less sophisticated than MFCC but avoids heavy dependencies
-            audio_signature = f"{int(duration)}_{int(fps)}_{video_clip.audio.nchannels if hasattr(video_clip.audio, 'nchannels') else 2}"
-            
-            # Convert to a numeric hash for consistency
-            hash_value = hash(audio_signature) % (10**8)  # Keep it as a reasonable size number
-            return str(hash_value)
-            
-    except Exception:
-        return "audio_error"  # Generic hash for any processing error
+    except Exception as e:
+        print(f"[DEBUG] Outer exception in get_audio_hash for {os.path.basename(filepath)}: {type(e).__name__}: {e}")
+        import traceback
+        print(f"[DEBUG] Full traceback:")
+        traceback.print_exc()
+        return "audio_error", f"Audio processing error: {type(e).__name__}"  # Generic hash for any processing error
 
 # --- Main Application Class (Wizard Style) ---
 class DuplicateFinderWizard:
@@ -108,8 +220,7 @@ class DuplicateFinderWizard:
         self.style = ttk.Style()
         self.bg_colour = self.style.lookup('TFrame', 'background')
 
-        
-        # --- State ---
+          # --- State ---
         self.current_screen = None
         self.scan_directories = set()
         self.duplicate_groups = {}
@@ -117,6 +228,7 @@ class DuplicateFinderWizard:
         self.checkbox_vars = {}
         self.active_media_player = None
         self.frames_to_compare = 10  # Default number of frames to compare per video
+        self.audio_processing_issues = {}  # Track files with audio processing problems
 
         # --- Screens ---
         self.screens = {
@@ -142,9 +254,9 @@ class DuplicateFinderWizard:
             self.root.minsize(800, 600)  # Increased minimum to accommodate both sections properly
             self.root.resizable(True, True)  # Allow resizing in case user has many folders
         elif screen_name in ["scanning", "deleting"]:
-            self.root.geometry("500x200")  # Reduced height since we only have one progress bar
-            self.root.minsize(500, 200)
-            self.root.resizable(False, False)
+            self.root.geometry("500x220")  # Reduced height since we only have one progress bar
+            self.root.minsize(500, 220)
+            self.root.resizable(True, True)
         elif screen_name == "folder_selection":
             self.root.geometry("500x320")  # Increased height to show header, settings, and buttons properly
             self.root.minsize(450, 320)
@@ -300,10 +412,16 @@ class DuplicateFinderWizard:
         
         self.scan_status_label = ttk.Label(frame, text="Gathering files...", wraplength=450, justify='center')
         self.scan_status_label.pack(pady=10)
+        
+        # Audio issues counter
+        self.scan_audio_issues_label = ttk.Label(frame, text="", foreground="orange", font=("Helvetica", 9))
+        self.scan_audio_issues_label.pack(pady=5)
+        
         return frame
 
     def scan_thread(self):
         self.duplicate_groups.clear()
+        self.audio_processing_issues.clear()  # Clear previous issues
         filepaths = [os.path.join(r, f) for d in self.scan_directories for r, _, fs in os.walk(d) for f in fs]
         total = len(filepaths)
         
@@ -355,11 +473,27 @@ class DuplicateFinderWizard:
                     self.root.after(0, lambda p=path, n=i, op=overall_progress: 
                                   self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
                     
-                    audio_h = get_audio_hash(path)
+                    print(f"\n[SCAN DEBUG] Starting audio processing for: {path}")
+                    print(f"[SCAN DEBUG] File extension: {os.path.splitext(path)[1].lower()}")
+                    print(f"[SCAN DEBUG] File size: {os.path.getsize(path) / (1024*1024):.2f} MB")
                     
-                    # Complete audio processing for this file
-                    self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                  self.update_scan_status(f"Completed audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
+                    audio_h, audio_issue = get_audio_hash(path)
+                    print(f"[SCAN DEBUG] Audio hash result: {audio_h}")
+                      # Track audio processing issues
+                    if audio_issue:
+                        self.audio_processing_issues[path] = audio_issue
+                        print(f"[SCAN DEBUG] Audio issue tracked: {audio_issue}")
+                        # Update status to show audio issue
+                        self.root.after(0, lambda p=path, n=i, op=overall_progress, issue=audio_issue: 
+                                      self.update_scan_status(f"Audio issue for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)} - {issue}", op))
+                        # Update audio issues counter
+                        issue_count = len(self.audio_processing_issues)
+                        self.root.after(0, lambda count=issue_count: 
+                                      self.update_audio_issues_counter(count))
+                    else:
+                        # Complete audio processing for this file
+                        self.root.after(0, lambda p=path, n=i, op=overall_progress: 
+                                      self.update_scan_status(f"Completed audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
                     
                     if audio_h not in audio_groups:
                         audio_groups[audio_h] = []
@@ -382,9 +516,13 @@ class DuplicateFinderWizard:
           # Sort each group by creation date (oldest first) so the original is typically the oldest
         for key in self.duplicate_groups:
             self.duplicate_groups[key].sort(key=lambda path: self.get_file_creation_time(path))
+          # Set to 100% completion
+        final_status = "Scan complete!"
+        if self.audio_processing_issues:
+            issue_count = len(self.audio_processing_issues)
+            final_status += f" (Note: {issue_count} file(s) had audio processing issues)"
         
-        # Set to 100% completion
-        self.root.after(0, lambda: self.update_scan_status("Scan complete!", 100))
+        self.root.after(0, lambda: self.update_scan_status(final_status, 100))
         self.root.after(0, self.on_scan_complete)
 
     def update_scan_status(self, text, overall_percentage):
@@ -392,13 +530,33 @@ class DuplicateFinderWizard:
         self.scan_overall_progress_bar['value'] = overall_percentage
         self.scan_overall_percentage.config(text=f"{overall_percentage:.1f}%")
 
+    def update_audio_issues_counter(self, count):
+        """Update the audio issues counter during scanning"""
+        if count > 0:
+            text = f"⚠️ {count} file(s) with audio processing issues"
+            self.scan_audio_issues_label.config(text=text)
+        else:
+            self.scan_audio_issues_label.config(text="")
+
     def on_scan_complete(self):
         if not self.duplicate_groups:
             messagebox.showinfo("Scan Complete", "No duplicate files were found.")
             self.close_app()
             return
         self.build_results_grid()
+        self.update_results_summary()  # Update the summary with audio issues
         self.show_screen("results")
+
+    def update_results_summary(self):
+        """Update the results screen summary to show audio processing issues"""
+        if self.audio_processing_issues:
+            issue_count = len(self.audio_processing_issues)
+            summary_text = f"Found {len(self.duplicate_groups)} duplicate groups.\nNote: {issue_count} file(s) had audio processing issues (marked with ⚠️)"
+        else:
+            summary_text = f"Found {len(self.duplicate_groups)} duplicate groups."
+        
+        if hasattr(self, 'results_status_label'):
+            self.results_status_label.config(text=summary_text)
 
     # --- Screen 3: Results ---
     def create_results_screen(self):
@@ -517,7 +675,22 @@ class DuplicateFinderWizard:
                 thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
                 self.thumbnail_widgets[filepath] = thumb_label # Store reference
 
-                ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0]).pack()
+                # Show filename
+                filename_label = ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0])
+                filename_label.pack()
+                
+                # Show audio processing issue if any
+                if filepath in self.audio_processing_issues:
+                    issue_text = self.audio_processing_issues[filepath]
+                    # Truncate long error messages
+                    if len(issue_text) > 50:
+                        issue_text = issue_text[:47] + "..."
+                    
+                    issue_label = tk.Label(item_frame, text=f"⚠️ {issue_text}", 
+                                         fg='orange', font=('Arial', 8), 
+                                         wraplength=THUMBNAIL_SIZE[0])
+                    issue_label.pack(pady=(2, 0))
+                
                 threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
 
     def on_thumbnail_click(self, filepath):
