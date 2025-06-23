@@ -18,7 +18,7 @@ THUMBNAIL_SIZE = (128, 128)
 # New preview size to better accommodate widescreen video
 PREVIEW_SIZE = (640, 480)
 # Preview pane will be calculated as 1/3 of window width
-PREVIEW_PANE_WIDTH = 350  # Base minimum width
+PREVIEW_PANE_WIDTH = 450  # Base minimum width
 
 # --- Core Hashing Functions ---
 def get_image_hash(filepath, hash_size=8):
@@ -567,11 +567,9 @@ class DuplicateFinderWizard:
         
         # Use Frame with grid layout for fixed sections (non-resizable)
         main_content_frame = ttk.Frame(frame)
-        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-        
-        # Configure grid layout with fixed proportions
-        main_content_frame.grid_columnconfigure(0, weight=2)  # 2/3 for duplicates, min 500px
-        main_content_frame.grid_columnconfigure(1, weight=1)  # Fixed width for preview
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)        # Configure grid layout with fixed preview width
+        main_content_frame.grid_columnconfigure(0, weight=1)  # Flexible width for duplicates
+        main_content_frame.grid_columnconfigure(1, weight=0, minsize=PREVIEW_PANE_WIDTH)  # Fixed width for preview
         main_content_frame.grid_rowconfigure(0, weight=1)
         
         # Left section for duplicates grid
@@ -590,11 +588,11 @@ class DuplicateFinderWizard:
         self.results_status_label.pack(side=tk.LEFT, padx=20)
         
         self.canvas_scroll_frame = tk.Canvas(grid_container, bg=self.bg_colour, highlightthickness=0)
+        
         scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.canvas_scroll_frame.yview)
         self.results_grid_frame = ttk.Frame(self.canvas_scroll_frame)
         self.canvas_scroll_frame.create_window((0, 0), window=self.results_grid_frame, anchor="nw")
         self.canvas_scroll_frame.configure(yscrollcommand=scrollbar.set)
-        
         self.canvas_scroll_frame.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.results_grid_frame.bind("<Configure>", lambda e: self.canvas_scroll_frame.configure(scrollregion=self.canvas_scroll_frame.bbox("all")))
@@ -907,7 +905,7 @@ class DuplicateFinderWizard:
         self.delete_overall_percentage = ttk.Label(overall_label_frame, text="0%")
         self.delete_overall_percentage.pack(side=tk.RIGHT)
         
-        self.delete_overall_progress_bar = ttk.Progressbar(frame, mode='determinate', length=600)
+        self.delete_overall_progress_bar = ttk.Progressbar(frame, mode='determinate', length=400)
         self.delete_overall_progress_bar.pack(pady=(5, 15))
         
         self.delete_status_label = ttk.Label(frame, text="Preparing to delete...")
@@ -993,10 +991,9 @@ class DuplicateFinderWizard:
         
         # Use Frame with grid layout for fixed sections (non-resizable)
         main_content_frame = ttk.Frame(frame)
-        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-          # Configure grid layout with fixed proportions
-        main_content_frame.grid_columnconfigure(0, weight=2)  # 2/3 for kept items
-        main_content_frame.grid_columnconfigure(1, weight=1)  # 1/3 for preview
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)        # Configure grid layout with fixed preview width
+        main_content_frame.grid_columnconfigure(0, weight=1)  # Flexible width for kept items
+        main_content_frame.grid_columnconfigure(1, weight=0, minsize=PREVIEW_PANE_WIDTH)  # Fixed width for preview
         main_content_frame.grid_rowconfigure(0, weight=1)
         
         # Left section for kept items grid
