@@ -235,6 +235,7 @@ class DuplicateFinderWizard:
         self.displayed_groups_count = 0
         self.is_loading_groups = False
         self.group_keys = []
+        self.select_all_state = False # Governs the state of "Select All Duplicates"
         
         # --- Lazy Loading State for Final Report ---
         self.KEPT_FILES_LOAD_BATCH_SIZE = 20
@@ -593,8 +594,8 @@ class DuplicateFinderWizard:
 
         results_header = ttk.Frame(grid_container)
         results_header.pack(fill='x', pady=5, padx=5)
-        ttk.Button(results_header, text="Select All Duplicates", command=self.select_all_duplicates).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(results_header, text="Deselect All", command=lambda: self.set_all_checkboxes(0)).pack(side=tk.LEFT)
+        ttk.Button(results_header, text="Select All Duplicates", command=lambda: self.set_all_checkboxes(True)).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(results_header, text="Deselect All", command=lambda: self.set_all_checkboxes(False)).pack(side=tk.LEFT)
         self.results_status_label = ttk.Label(results_header, text=" ", foreground="blue") # Use a space to reserve height
         self.results_status_label.pack(side=tk.LEFT, padx=20)
         
@@ -674,6 +675,7 @@ class DuplicateFinderWizard:
         self.group_keys = list(self.duplicate_groups.keys())
         self.displayed_groups_count = 0
         self.is_loading_groups = False
+        self.select_all_state = False # Reset select all state
         
         # Load the first batch of groups
         self.load_more_groups()
@@ -718,11 +720,14 @@ class DuplicateFinderWizard:
                     thumb_bg = 'gray'
                     thumb_relief = 'raised'
                 else:
-                    var = tk.BooleanVar(value=False)
+                    # Initialize the checkbox state based on the global select_all_state
+                    var = tk.BooleanVar(value=self.select_all_state)
                     checkbox = ttk.Checkbutton(item_frame, variable=var)
                     checkbox.pack()
+                    
                     thumb_bg = 'gray'
                     thumb_relief = 'raised'
+                    
                     self.checkbox_vars[filepath] = var
                 
                 thumb_label = tk.Label(item_frame, bg=thumb_bg, relief=thumb_relief, width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
@@ -925,24 +930,36 @@ class DuplicateFinderWizard:
             # print(f"Thumbnail error for {os.path.basename(filepath)}: {e}")
             self.root.after(0, lambda: label.config(text="Error", bg="red"))
 
-    def select_all_duplicates(self):
-        # This function no longer reloads thumbnails. It only sets checkbox states.
-        self.set_all_checkboxes(0)
-        self.root.after(100, self._select_duplicates_worker)
-
-    def _select_duplicates_worker(self):
-        for group in self.duplicate_groups.values():
-            for path in group[1:]:
-                if path in self.checkbox_vars:
-                    self.checkbox_vars[path].set(True)
-
     def set_all_checkboxes(self, value):
-        # Only duplicates have checkboxes, originals are excluded from checkbox_vars
+        """Sets the state for all duplicate checkboxes, including those not yet rendered."""
+        self.select_all_state = bool(value)
+        # Update only the checkboxes that have already been created
         for var in self.checkbox_vars.values():
-            var.set(value)
+            var.set(self.select_all_state)
 
     def start_deletion(self):
-        self.files_to_delete = [path for path, var in self.checkbox_vars.items() if var.get()]
+        """Builds the list of files to delete based on the 'select all' state and any manual changes."""
+        files_to_delete_set = set()
+    
+        if self.select_all_state:
+            # Start with all possible duplicates if "Select All" is active
+            all_duplicates = {path for group in self.duplicate_groups.values() for path in group[1:]}
+            
+            # Find rendered items that were manually unchecked by the user
+            unchecked_rendered_items = {
+                path for path, var in self.checkbox_vars.items() if not var.get()
+            }
+            
+            # The final set to delete is all duplicates MINUS the ones the user manually unchecked
+            files_to_delete_set = all_duplicates - unchecked_rendered_items
+            
+        else: # "Select All" is not active, so only manually checked items count
+            files_to_delete_set = {
+                path for path, var in self.checkbox_vars.items() if var.get()
+            }
+
+        self.files_to_delete = list(files_to_delete_set)
+        
         if not self.files_to_delete:
             messagebox.showwarning("No Selection", "No files selected for deletion.")
             return
