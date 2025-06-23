@@ -220,7 +220,7 @@ class DuplicateFinderWizard:
         self.style = ttk.Style()
         self.bg_colour = self.style.lookup('TFrame', 'background')
 
-          # --- State ---
+        # --- State ---
         self.current_screen = None
         self.scan_directories = set()
         self.duplicate_groups = {}
@@ -230,6 +230,17 @@ class DuplicateFinderWizard:
         self.frames_to_compare = 10  # Default number of frames to compare per video
         self.audio_processing_issues = {}  # Track files with audio processing problems
 
+        # --- Lazy Loading State for Results ---
+        self.GROUP_LOAD_BATCH_SIZE = 6
+        self.displayed_groups_count = 0
+        self.is_loading_groups = False
+        self.group_keys = []
+        
+        # --- Lazy Loading State for Final Report ---
+        self.KEPT_FILES_LOAD_BATCH_SIZE = 20
+        self.displayed_kept_files_count = 0
+        self.is_loading_kept_files = False
+        
         # --- Screens ---
         self.screens = {
             "folder_selection": self.create_folder_selection_screen(),
@@ -541,6 +552,8 @@ class DuplicateFinderWizard:
             messagebox.showinfo("Scan Complete", "No duplicate files were found.")
             self.close_app()
             return
+            
+        # This now sets up the results screen for lazy loading
         self.build_results_grid()
         self.update_results_summary()  # Update the summary with audio issues
         self.show_screen("results")
@@ -587,14 +600,20 @@ class DuplicateFinderWizard:
         
         self.canvas_scroll_frame = tk.Canvas(grid_container, bg=self.bg_colour, highlightthickness=0)
         
-        scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.canvas_scroll_frame.yview)
+        # Make the scrollbar an instance variable to check its position
+        self.results_scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.canvas_scroll_frame.yview)
         self.results_grid_frame = ttk.Frame(self.canvas_scroll_frame)
         self.canvas_scroll_frame.create_window((0, 0), window=self.results_grid_frame, anchor="nw")
-        self.canvas_scroll_frame.configure(yscrollcommand=scrollbar.set)
+        self.canvas_scroll_frame.configure(yscrollcommand=self.results_scrollbar.set)
+        
         self.canvas_scroll_frame.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        self.results_scrollbar.pack(side="right", fill="y")
+        
         self.results_grid_frame.bind("<Configure>", lambda e: self.canvas_scroll_frame.configure(scrollregion=self.canvas_scroll_frame.bbox("all")))
         self.canvas_scroll_frame.bind_all("<MouseWheel>", self._on_mousewheel)
+        
+        # Add binding for when the user drags the scrollbar
+        self.results_scrollbar.bind("<ButtonRelease-1>", lambda e: self._check_scroll_and_load())
         
         footer = ttk.Frame(frame)
         footer.pack(fill='x', pady=20, padx=20)
@@ -602,39 +621,87 @@ class DuplicateFinderWizard:
         
         return frame
         
+    def _check_scroll_and_load(self):
+        """Check if the scrollbar is at the bottom and load more groups if so."""
+        if self.is_loading_groups:
+            return
+            
+        # Get scrollbar position (top_fraction, bottom_fraction)
+        top, bottom = self.results_scrollbar.get()
+        
+        # If the bottom of the scrollbar is at or near the end, load more
+        if bottom >= 1.0:
+            self.load_more_groups()
+            
+    def _check_final_scroll_and_load(self):
+        """Check if the final report scrollbar is at the bottom and load more items if so."""
+        if self.is_loading_kept_files:
+            return
+
+        top, bottom = self.final_scrollbar.get()
+        
+        if bottom >= 1.0:
+            self.load_more_kept_items()
+
     def _on_mousewheel(self, event):
         active_canvas = None
+        # Determine which canvas and scroll check to use based on the current screen
         if self.current_screen == self.screens['results']:
             active_canvas = self.canvas_scroll_frame
+            scroll_check_func = self._check_scroll_and_load
         elif self.current_screen == self.screens['final_report']:
             active_canvas = self.final_canvas
+            scroll_check_func = self._check_final_scroll_and_load
+        else:
+            return # No scrollable canvas on other screens
 
-        # For results screen, allow scrolling anywhere on the page
-        if self.current_screen == self.screens['results'] and active_canvas:
+        if active_canvas:
             active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        # For final report screen, also allow scrolling anywhere on the page
-        elif self.current_screen == self.screens['final_report'] and active_canvas:
-            active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        # For other screens, check if mouse is over the specific canvas
-        elif active_canvas and hasattr(active_canvas, 'winfo_containing') and active_canvas.winfo_containing(event.x_root, event.y_root) == active_canvas:
-            active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            # Give Tkinter a moment to process the scroll before checking the position
+            self.root.after(20, scroll_check_func)
 
     def build_results_grid(self):
-        # This function is now only for building the grid, not reloading it.
-        # Store thumbnail widgets to prevent reloading
+        """
+        Sets up the results view for lazy loading.
+        It clears previous results and loads the first batch of groups.
+        """
         self.thumbnail_widgets = {} 
         for widget in self.results_grid_frame.winfo_children():
             widget.destroy()
         self.checkbox_vars.clear()
 
-        # Iterate through groups to create a grouped layout
-        for i, (hash_val, paths) in enumerate(self.duplicate_groups.items()):
-            group_frame = ttk.LabelFrame(self.results_grid_frame, text=f"Group {i+1} ({len(paths)} items)")
+        # Set up state for lazy loading
+        self.group_keys = list(self.duplicate_groups.keys())
+        self.displayed_groups_count = 0
+        self.is_loading_groups = False
+        
+        # Load the first batch of groups
+        self.load_more_groups()
+        
+    def load_more_groups(self):
+        """Loads the next batch of duplicate groups into the results view."""
+        # Check if we are already loading or if all groups are loaded
+        if self.is_loading_groups or self.displayed_groups_count >= len(self.group_keys):
+            return
+
+        self.is_loading_groups = True
+
+        start_index = self.displayed_groups_count
+        end_index = min(start_index + self.GROUP_LOAD_BATCH_SIZE, len(self.group_keys))
+
+        # Get the keys for the current batch
+        keys_to_load = self.group_keys[start_index:end_index]
+
+        # Build the UI for these groups
+        for i, hash_val in enumerate(keys_to_load):
+            current_group_index = start_index + i
+            paths = self.duplicate_groups[hash_val]
+            
+            group_frame = ttk.LabelFrame(self.results_grid_frame, text=f"Group {current_group_index + 1} ({len(paths)} items)")
             group_frame.pack(fill='x', expand=True, padx=10, pady=10)
 
-            container_width = group_frame.winfo_width()
-            if container_width <= 1: container_width = self.results_grid_frame.winfo_width()
-            if container_width <= 1: container_width = 800 # Fallback
+            container_width = self.results_grid_frame.winfo_width()
+            if container_width <= 1: container_width = 800 # Fallback for initial load
             max_cols = max(1, container_width // (THUMBNAIL_SIZE[0] + 20))
 
             for j, filepath in enumerate(paths):
@@ -646,51 +713,41 @@ class DuplicateFinderWizard:
                 is_original = (j == 0)  # First item in each group is the original
                 
                 if is_original:
-                    # Original - cannot be selected for deletion
-                    # Don't create a checkbox for originals
-                    
-                    # Add simple "Original" label
                     original_label = tk.Label(item_frame, text="Original", fg='black', font=('Arial', 9))
                     original_label.pack(pady=2)
-                    
-                    # Standard thumbnail styling
                     thumb_bg = 'gray'
                     thumb_relief = 'raised'
-                    
-                    # Don't add to checkbox_vars since there's no checkbox
                 else:
-                    # Duplicate - can be selected for deletion
                     var = tk.BooleanVar(value=False)
                     checkbox = ttk.Checkbutton(item_frame, variable=var)
                     checkbox.pack()
-                    
                     thumb_bg = 'gray'
                     thumb_relief = 'raised'
-                    
                     self.checkbox_vars[filepath] = var
                 
                 thumb_label = tk.Label(item_frame, bg=thumb_bg, relief=thumb_relief, width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
                 thumb_label.pack(pady=5)
                 thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
-                self.thumbnail_widgets[filepath] = thumb_label # Store reference
+                self.thumbnail_widgets[filepath] = thumb_label
 
-                # Show filename
                 filename_label = ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0])
                 filename_label.pack()
                 
-                # Show audio processing issue if any
                 if filepath in self.audio_processing_issues:
                     issue_text = self.audio_processing_issues[filepath]
-                    # Truncate long error messages
                     if len(issue_text) > 50:
                         issue_text = issue_text[:47] + "..."
-                    
-                    issue_label = tk.Label(item_frame, text=f"⚠️ {issue_text}", 
-                                         fg='orange', font=('Arial', 8), 
-                                         wraplength=THUMBNAIL_SIZE[0])
+                    issue_label = tk.Label(item_frame, text=f"⚠️ {issue_text}", fg='orange', font=('Arial', 8), wraplength=THUMBNAIL_SIZE[0])
                     issue_label.pack(pady=(2, 0))
                 
                 threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+
+        # Update the count of displayed groups and unlock loading
+        self.displayed_groups_count = end_index
+        self.is_loading_groups = False
+
+        # Allow the UI to update before the next potential scroll check
+        self.root.update_idletasks()
 
     def on_thumbnail_click(self, filepath):
         if self.active_media_player:
@@ -1006,15 +1063,16 @@ class DuplicateFinderWizard:
         self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
         
         self.final_canvas = tk.Canvas(grid_container, bg=self.bg_colour, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
+        self.final_scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
         self.final_grid_frame = ttk.Frame(self.final_canvas)
         self.final_canvas.create_window((0, 0), window=self.final_grid_frame, anchor="nw")
-        self.final_canvas.configure(yscrollcommand=scrollbar.set)
+        self.final_canvas.configure(yscrollcommand=self.final_scrollbar.set)
         
         self.final_canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        self.final_scrollbar.pack(side="right", fill="y")
         self.final_grid_frame.bind("<Configure>", lambda e: self.final_canvas.configure(scrollregion=self.final_canvas.bbox("all")))
-        
+        self.final_scrollbar.bind("<ButtonRelease-1>", lambda e: self._check_final_scroll_and_load())
+
         footer = ttk.Frame(frame)
         footer.pack(fill='x', pady=20, padx=20)
         ttk.Button(footer, text="Done ✔", style="Accent.TButton", command=self.close_app).pack(side=tk.RIGHT)
@@ -1022,24 +1080,53 @@ class DuplicateFinderWizard:
         return frame
 
     def build_final_report_grid(self):
-        self.thumbnail_widgets = {} 
+        self.thumbnail_widgets = {}
         for widget in self.final_grid_frame.winfo_children():
             widget.destroy()
+
+        # Set up state for lazy loading
+        self.displayed_kept_files_count = 0
+        self.is_loading_kept_files = False
+        
+        # Load the first batch of items
+        self.load_more_kept_items()
+
+    def load_more_kept_items(self):
+        """Loads the next batch of kept items into the final report view."""
+        if self.is_loading_kept_files or self.displayed_kept_files_count >= len(self.kept_files):
+            return
+
+        self.is_loading_kept_files = True
+
+        start_index = self.displayed_kept_files_count
+        end_index = min(start_index + self.KEPT_FILES_LOAD_BATCH_SIZE, len(self.kept_files))
+
+        files_to_load = self.kept_files[start_index:end_index]
         
         container_width = self.final_grid_frame.winfo_width()
-        if container_width <= 1: container_width = 800
+        if container_width <= 1: container_width = 800 # Fallback
         max_cols = max(1, container_width // (THUMBNAIL_SIZE[0] + 20))
         
-        for i, filepath in enumerate(self.kept_files):
-            row, col = divmod(i, max_cols)
+        for i, filepath in enumerate(files_to_load):
+            # Calculate grid position based on the total number of items already displayed
+            total_index = start_index + i
+            row, col = divmod(total_index, max_cols)
+            
             item_frame = ttk.Frame(self.final_grid_frame, padding=5)
             item_frame.grid(row=row, column=col, padx=5, pady=5)
+            
             thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
             thumb_label.pack(pady=5)
             thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
             self.thumbnail_widgets[filepath] = thumb_label # Store reference
+            
             ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0]).pack()
             threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+
+        self.displayed_kept_files_count = end_index
+        self.is_loading_kept_files = False
+
+        self.root.update_idletasks()
 
     def close_app(self):
         """Close the application"""
