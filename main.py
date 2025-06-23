@@ -22,10 +22,28 @@ PREVIEW_PANE_WIDTH = 450  # Base minimum width
 
 # --- Core Hashing Functions ---
 def get_image_hash(filepath, hash_size=8):
+    """
+    Generate a perceptual hash for an image.
+    Crucially, this function differentiates between animated and static images
+    by prepending a prefix to the hash.
+    """
     try:
         with Image.open(filepath) as img:
-            return imagehash.average_hash(img.convert('RGB'), hash_size=hash_size)
-    except Exception: return None
+            # Check if the image is animated by checking the number of frames.
+            # The 'n_frames' attribute is the most reliable way.
+            is_animated = getattr(img, 'n_frames', 1) > 1
+            
+            # Calculate the standard average hash from the first frame.
+            core_hash = imagehash.average_hash(img.convert('RGB'), hash_size=hash_size)
+
+            # Return a hash prefixed to distinguish animated from static images.
+            # This ensures they are never in the same duplicate group.
+            if is_animated:
+                return f"anim_{core_hash}"
+            else:
+                return f"static_{core_hash}"
+    except Exception: 
+        return None
 
 def get_video_signature(filepath, hash_size=8, frames_to_compare=10):
     """Generate a signature for a video by sampling frames evenly throughout the video"""
