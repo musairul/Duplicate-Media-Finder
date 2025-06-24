@@ -1,9 +1,9 @@
-# main_wizard_gui.py
 import os
 import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import queue
 
 import cv2
 import imagehash
@@ -105,72 +105,49 @@ def get_audio_hash(filepath, hash_size=8):
     def load_video_clip(filepath, result_queue):
         """Load VideoFileClip in a separate thread"""
         try:
-            print(f"[DEBUG] Thread: Attempting to load VideoFileClip...")
             with VideoFileClip(filepath) as video_clip:
-                print(f"[DEBUG] Thread: Video clip loaded successfully")
-                print(f"[DEBUG] Thread: Video duration: {video_clip.duration}")
-                print(f"[DEBUG] Thread: Video fps: {video_clip.fps}")
-                
                 if video_clip.audio is None:
-                    print(f"[DEBUG] Thread: No audio track found in video")
                     result_queue.put(("success", "no_audio", None))  # No issue for missing audio
                     return
-                
-                print(f"[DEBUG] Thread: Audio track found")
                 
                 # Get basic audio properties
                 try:
                     duration = video_clip.audio.duration
-                    print(f"[DEBUG] Thread: Audio duration: {duration}")
-                except Exception as e:
-                    print(f"[DEBUG] Thread: Error getting audio duration: {e}")
+                except Exception:
                     duration = 0
                 
                 try:
                     fps = video_clip.audio.fps if hasattr(video_clip.audio, 'fps') else 44100
-                    print(f"[DEBUG] Thread: Audio fps: {fps}")
-                except Exception as e:
-                    print(f"[DEBUG] Thread: Error getting audio fps: {e}")
+                except Exception:
                     fps = 44100
                     
                 try:
                     nchannels = video_clip.audio.nchannels if hasattr(video_clip.audio, 'nchannels') else 2
-                    print(f"[DEBUG] Thread: Audio channels: {nchannels}")
-                except Exception as e:
-                    print(f"[DEBUG] Thread: Error getting audio channels: {e}")
+                except Exception:
                     nchannels = 2
                 
                 # Create a simple hash based on duration and basic properties
                 audio_signature = f"{int(duration)}_{int(fps)}_{nchannels}"
-                print(f"[DEBUG] Thread: Audio signature: {audio_signature}")
                 
                 # Convert to a numeric hash for consistency
                 hash_value = hash(audio_signature) % (10**8)
-                print(f"[DEBUG] Thread: Generated hash: {hash_value}")
                 result_queue.put(("success", str(hash_value), None))
                 
         except Exception as e:
-            print(f"[DEBUG] Thread: Exception during VideoFileClip processing: {type(e).__name__}: {e}")
             result_queue.put(("error", str(e), f"MoviePy error: {type(e).__name__}"))
     
     try:
-        print(f"[DEBUG] Processing audio for: {os.path.basename(filepath)}")
-        
         # Create a queue for thread communication
         result_queue = queue.Queue()
         
         # Start the video loading in a separate thread
         thread = threading.Thread(target=load_video_clip, args=(filepath, result_queue), daemon=True)
         thread.start()
-          # Wait for the thread with a timeout
         thread.join(timeout=10)  # 10 second timeout
         
         if thread.is_alive():
-            print(f"[DEBUG] VideoFileClip loading timed out after 30 seconds")
             # Thread is still running, we'll abandon it and use fallback
-            
             # Try alternative approach using OpenCV for basic file info
-            print(f"[DEBUG] Attempting fallback with OpenCV...")
             try:
                 cap = cv2.VideoCapture(filepath)
                 if cap.isOpened():
@@ -182,26 +159,19 @@ def get_audio_hash(filepath, hash_size=8):
                     # Create a basic signature from video properties
                     fallback_signature = f"fallback_{int(duration)}_{int(fps)}_unknown"
                     fallback_hash = hash(fallback_signature) % (10**8)
-                    print(f"[DEBUG] Fallback signature: {fallback_signature}")
-                    print(f"[DEBUG] Fallback hash: {fallback_hash}")
                     return str(fallback_hash), "Failed to process audio"
                 else:
-                    print(f"[DEBUG] OpenCV fallback also failed")
                     return "opencv_error", "Failed to process audio - OpenCV error"
-            except Exception as cv_exception:
-                print(f"[DEBUG] OpenCV fallback exception: {type(cv_exception).__name__}: {cv_exception}")
+            except Exception:
                 return "fallback_error", "Failed to process audio - fallback error"
         else:
             # Thread completed, get the result
             try:
                 status, result, issue = result_queue.get_nowait()
                 if status == "success":
-                    print(f"[DEBUG] Successfully got result: {result}")
                     return result, issue
                 else:
-                    print(f"[DEBUG] Thread returned error: {result}")
                     # Fall back to OpenCV approach
-                    print(f"[DEBUG] Attempting fallback with OpenCV...")
                     try:
                         cap = cv2.VideoCapture(filepath)
                         if cap.isOpened():
@@ -212,23 +182,16 @@ def get_audio_hash(filepath, hash_size=8):
                             
                             fallback_signature = f"fallback_{int(duration)}_{int(fps)}_unknown"
                             fallback_hash = hash(fallback_signature) % (10**8)
-                            print(f"[DEBUG] Fallback signature: {fallback_signature}")
-                            print(f"[DEBUG] Fallback hash: {fallback_hash}")
                             return str(fallback_hash), f"Audio processing failed - used video metadata fallback ({issue})"
                         else:
                             return "opencv_error", "Failed to process audio - OpenCV error"
                     except Exception:
                         return "fallback_error", "Failed to process audio - fallback error"
             except queue.Empty:
-                print(f"[DEBUG] Thread completed but no result available")
                 return "thread_error", "Audio processing failed - no result available"
             
     except Exception as e:
-        print(f"[DEBUG] Outer exception in get_audio_hash for {os.path.basename(filepath)}: {type(e).__name__}: {e}")
-        import traceback
-        print(f"[DEBUG] Full traceback:")
-        traceback.print_exc()
-        return "audio_error", f"Audio processing error: {type(e).__name__}"  # Generic hash for any processing error
+        return "audio_error", f"Audio processing error: {type(e).__name__}"
 
 # --- Main Application Class (Wizard Style) ---
 class DuplicateFinderWizard:
@@ -245,21 +208,18 @@ class DuplicateFinderWizard:
         self.kept_files = []
         self.checkbox_vars = {}
         self.active_media_player = None
-        self.frames_to_compare = 10  # Default number of frames to compare per video
-        self.audio_processing_issues = {}  # Track files with audio processing problems
+        self.frames_to_compare = 10
+        self.audio_processing_issues = {}
 
-        # --- Lazy Loading State for Results ---
-        self.GROUP_LOAD_BATCH_SIZE = 6
-        self.displayed_groups_count = 0
-        self.is_loading_groups = False
+        # --- Virtualized Scrolling State ---
         self.group_keys = []
-        self.select_all_state = False # Governs the state of "Select All Duplicates"
-        
-        # --- Lazy Loading State for Final Report ---
-        self.KEPT_FILES_LOAD_BATCH_SIZE = 20
-        self.displayed_kept_files_count = 0
-        self.is_loading_kept_files = False
-        
+        self.group_layout_info = []
+        self.active_group_widgets = {}
+        self.kept_files_layout_info = []
+        self.active_kept_file_widgets = {}
+        self.select_all_state = False
+        self.thumbnail_widgets = {}
+
         # --- Screens ---
         self.screens = {
             "folder_selection": self.create_folder_selection_screen(),
@@ -281,16 +241,16 @@ class DuplicateFinderWizard:
         # --- Dynamic Window Sizing ---
         if screen_name in ["results", "final_report"]:
             self.root.geometry("1280x720")
-            self.root.minsize(800, 600)  # Increased minimum to accommodate both sections properly
-            self.root.resizable(True, True)  # Allow resizing in case user has many folders
+            self.root.minsize(800, 600)
+            self.root.resizable(True, True)
         elif screen_name in ["scanning", "deleting"]:
-            self.root.geometry("500x220")  # Reduced height since we only have one progress bar
+            self.root.geometry("500x220")
             self.root.minsize(500, 220)
             self.root.resizable(True, True)
         elif screen_name == "folder_selection":
-            self.root.geometry("500x320")  # Increased height to show header, settings, and buttons properly
+            self.root.geometry("500x320")
             self.root.minsize(450, 320)
-            self.root.resizable(True, True)  # Allow resizing in case user has many folders
+            self.root.resizable(True, True)
         else:
             self.root.geometry("600x400")
             self.root.minsize(600, 350)
@@ -318,11 +278,9 @@ class DuplicateFinderWizard:
         self.remove_folder_btn = ttk.Button(btn_frame, text="Remove Selected", command=self.remove_folder, state=tk.DISABLED)
         self.start_scan_btn = ttk.Button(btn_frame, text="Start Scan ➤", style="Accent.TButton", command=self.start_scan, state=tk.DISABLED)
         
-        # Video comparison settings frame
         settings_frame = ttk.LabelFrame(frame, text="Video Comparison Settings")
         settings_frame.pack(pady=20, padx=20, fill='x')
         
-        # Frames to compare slider
         frames_label_frame = ttk.Frame(settings_frame)
         frames_label_frame.pack(fill='x', padx=10, pady=10)
         
@@ -331,19 +289,15 @@ class DuplicateFinderWizard:
         self.frames_value_label.pack(side=tk.RIGHT)
         
         self.frames_slider = ttk.Scale(settings_frame, from_=3, to=50, orient=tk.HORIZONTAL, 
-                                      command=self.on_frames_slider_change, length=300)
+                                       command=self.on_frames_slider_change, length=300)
         self.frames_slider.set(self.frames_to_compare)
         self.frames_slider.pack(padx=10, pady=(0, 10))
         
-        # Help text
         help_text = ttk.Label(settings_frame, 
-                             text="More frames = more accurate detection but slower processing\n"
-                                  "Fewer frames = faster processing but may miss some duplicates",
-                             font=("Helvetica", 9), foreground="gray")
+                              text="More frames = more accurate detection but slower processing\n"
+                                   "Fewer frames = faster processing but may miss some duplicates",
+                              font=("Helvetica", 9), foreground="gray")
         help_text.pack(padx=10, pady=(0, 10))
-        
-        # Initially hide the remove and scan buttons - they'll be shown when folders are added
-        # Don't pack them initially
         
         return frame
 
@@ -358,7 +312,6 @@ class DuplicateFinderWizard:
             self.scan_directories.add(dir_path)
             self.folder_listbox.insert(tk.END, dir_path)
             self.folder_listbox.config(height=len(self.scan_directories))
-            # Resize window to fit content
             self._resize_folder_selection_window()
             self._update_folder_buttons()
 
@@ -373,48 +326,34 @@ class DuplicateFinderWizard:
         
         if list_size == 0:
             self.list_frame.pack_forget()
-        # Resize window to fit content
         self._resize_folder_selection_window()
         self._update_folder_buttons()
 
     def _resize_folder_selection_window(self):
-        """Resize the window to fit the folder list content"""
-        # Update the UI to ensure proper sizing calculations        self.root.update_idletasks()
-        
-        # Calculate required height based on content
-        base_height = 320  # Header + settings frame + button frame + padding (increased to account for slider)
+        self.root.update_idletasks()
+        base_height = 320
         if len(self.scan_directories) > 0:
-            # Add height for the list frame (approximately 20px per item + frame padding)
-            list_height = len(self.scan_directories) * 20 + 60  # 60 for frame and padding
+            list_height = len(self.scan_directories) * 20 + 60
             total_height = base_height + list_height
         else:
             total_height = base_height
-          # Set reasonable bounds
-        min_height = 320  # Increased minimum height to account for slider
-        max_height = 500  # Don't make it too tall
+        min_height = 320
+        max_height = 500
         final_height = max(min_height, min(max_height, total_height))
-        
-        # Keep width reasonable
         width = 500
-        
-        # Apply the new geometry
         self.root.geometry(f"{width}x{final_height}")
 
     def _update_folder_buttons(self):
-        """Update button visibility based on folder selection"""
         if self.scan_directories:
-            # Show buttons when folders are selected
             self.remove_folder_btn.pack(side=tk.LEFT, padx=10)
             self.start_scan_btn.pack(side=tk.LEFT, padx=20)
             self.remove_folder_btn.config(state=tk.NORMAL)
             self.start_scan_btn.config(state=tk.NORMAL)
         else:
-            # Hide buttons when no folders are selected
             self.remove_folder_btn.pack_forget()
             self.start_scan_btn.pack_forget()
 
     def on_frames_slider_change(self, value):
-        """Callback for when the frames slider value changes"""
         self.frames_to_compare = int(float(value))
         self.frames_value_label.config(text=f"{self.frames_to_compare}")
 
@@ -430,7 +369,6 @@ class DuplicateFinderWizard:
         frame = ttk.Frame(self.root)
         ttk.Label(frame, text="Step 2: Scanning...", font=("Helvetica", 16, "bold")).pack(pady=20)
         
-        # Overall progress section
         overall_label_frame = ttk.Frame(frame)
         overall_label_frame.pack(pady=5)
         ttk.Label(overall_label_frame, text="Overall Progress", font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
@@ -443,7 +381,6 @@ class DuplicateFinderWizard:
         self.scan_status_label = ttk.Label(frame, text="Gathering files...", wraplength=450, justify='center')
         self.scan_status_label.pack(pady=10)
         
-        # Audio issues counter
         self.scan_audio_issues_label = ttk.Label(frame, text="", foreground="red", font=("Helvetica", 9))
         self.scan_audio_issues_label.pack(pady=5)
         
@@ -451,19 +388,16 @@ class DuplicateFinderWizard:
 
     def scan_thread(self):
         self.duplicate_groups.clear()
-        self.audio_processing_issues.clear()  # Clear previous issues
+        self.audio_processing_issues.clear()
         filepaths = [os.path.join(r, f) for d in self.scan_directories for r, _, fs in os.walk(d) for f in fs]
         total = len(filepaths)
         
-        # Initialize progress bar
-        self.scan_overall_progress_bar['maximum'] = 100  # Overall progress in percentage
+        self.scan_overall_progress_bar['maximum'] = 100
         hashes = {}
-          # Step 1: Initial scan for images and visual hash for videos (75% of overall progress)
         for i, path in enumerate(filepaths):
-            # Show current file starting to be processed
-            overall_progress = (i / total) * 75  # First 75% of overall progress
+            overall_progress = (i / total) * 75
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                          self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", op))
+                self.update_scan_status(f"Processing visuals ({n+1}/{total}): {os.path.basename(p)}", op))
             
             ext = os.path.splitext(path)[1].lower()
             h = None
@@ -476,18 +410,15 @@ class DuplicateFinderWizard:
                 if h not in hashes: hashes[h] = []
                 hashes[h].append(path)
             
-            # Update overall progress after completing this file
             overall_progress = ((i + 1) / total) * 75
             self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                          self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", op))
+                self.update_scan_status(f"Completed visuals ({n+1}/{total}): {os.path.basename(p)}", op))
         
-        # Initial duplicate groups based on visual similarity
         visual_duplicate_groups = {k: v for k, v in hashes.items() if len(v) > 1}
         final_duplicate_groups = {}
-          # Step 2: Refine video groups with audio hashing (remaining 25% of overall progress)
         group_counter = 0
         total_video_files = sum(len(paths) for paths in visual_duplicate_groups.values() 
-                               if any(os.path.splitext(p)[1].lower() in VIDEO_EXTENSIONS for p in paths))
+                                if any(os.path.splitext(p)[1].lower() in VIDEO_EXTENSIONS for p in paths))
         processed_video_files = 0
         
         for visual_hash, paths in visual_duplicate_groups.items():
@@ -496,55 +427,34 @@ class DuplicateFinderWizard:
             if is_video_group:
                 audio_groups = {}
                 for i, path in enumerate(paths):
-                    # Show current file starting to be processed for audio
-                    overall_progress = 75 + (processed_video_files / total_video_files) * 25
+                    overall_progress = 75 + (processed_video_files / max(1, total_video_files)) * 25
                     self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                  self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
-                    
-                    print(f"\n[SCAN DEBUG] Starting audio processing for: {path}")
-                    print(f"[SCAN DEBUG] File extension: {os.path.splitext(path)[1].lower()}")
-                    print(f"[SCAN DEBUG] File size: {os.path.getsize(path) / (1024*1024):.2f} MB")
+                        self.update_scan_status(f"Processing audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
                     
                     audio_h, audio_issue = get_audio_hash(path)
-                    print(f"[SCAN DEBUG] Audio hash result: {audio_h}")
-                      # Track audio processing issues
                     if audio_issue:
                         self.audio_processing_issues[path] = audio_issue
-                        print(f"[SCAN DEBUG] Audio issue tracked: {audio_issue}")
-                        # Update status to show audio issue
-                        self.root.after(0, lambda p=path, n=i, op=overall_progress, issue=audio_issue: 
-                                      self.update_scan_status(f"Audio issue for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)} - {issue}", op))
-                        # Update audio issues counter
                         issue_count = len(self.audio_processing_issues)
-                        self.root.after(0, lambda count=issue_count: 
-                                      self.update_audio_issues_counter(count))
-                    else:
-                        # Complete audio processing for this file
-                        self.root.after(0, lambda p=path, n=i, op=overall_progress: 
-                                      self.update_scan_status(f"Completed audio for group {group_counter+1} ({n+1}/{len(paths)}): {os.path.basename(p)}", op))
-                    
+                        self.root.after(0, self.update_audio_issues_counter, issue_count)
+
                     if audio_h not in audio_groups:
                         audio_groups[audio_h] = []
                     audio_groups[audio_h].append(path)
                     
                     processed_video_files += 1
 
-                # Add subgroups that are actual duplicates (more than one item)
                 for audio_hash, audio_paths in audio_groups.items():
                     if len(audio_paths) > 1:
-                        # Create a unique key for the final group
                         final_group_key = f"{visual_hash}_{audio_hash}"
                         final_duplicate_groups[final_group_key] = audio_paths
             else:
-                # This is an image group, add it directly
                 final_duplicate_groups[visual_hash] = paths
             group_counter += 1
             
         self.duplicate_groups = final_duplicate_groups
-          # Sort each group by creation date (oldest first) so the original is typically the oldest
         for key in self.duplicate_groups:
             self.duplicate_groups[key].sort(key=lambda path: self.get_file_creation_time(path))
-          # Set to 100% completion
+
         final_status = "Scan complete!"
         if self.audio_processing_issues:
             issue_count = len(self.audio_processing_issues)
@@ -559,7 +469,6 @@ class DuplicateFinderWizard:
         self.scan_overall_percentage.config(text=f"{overall_percentage:.1f}%")
 
     def update_audio_issues_counter(self, count):
-        """Update the audio issues counter during scanning"""
         if count > 0:
             text = f"⚠️ {count} file(s) with audio processing issues"
             self.scan_audio_issues_label.config(text=text)
@@ -572,13 +481,11 @@ class DuplicateFinderWizard:
             self.close_app()
             return
             
-        # This now sets up the results screen for lazy loading
-        self.build_results_grid()
-        self.update_results_summary()  # Update the summary with audio issues
+        self.prepare_virtualized_results()
+        self.update_results_summary()
         self.show_screen("results")
 
     def update_results_summary(self):
-        """Update the results screen summary to show audio processing issues"""
         if self.audio_processing_issues:
             issue_count = len(self.audio_processing_issues)
             summary_text = f"Found {len(self.duplicate_groups)} duplicate groups.\nNote: {issue_count} file(s) had audio processing issues (marked with ⚠️)"
@@ -588,25 +495,22 @@ class DuplicateFinderWizard:
         if hasattr(self, 'results_status_label'):
             self.results_status_label.config(text=summary_text)
 
-    # --- Screen 3: Results ---
+    # --- Screen 3: Results (VIRTUALIZED) ---
     def create_results_screen(self):
         frame = ttk.Frame(self.root)
         header_frame = ttk.Frame(frame)
         header_frame.pack(fill='x', padx=20, pady=10)
         ttk.Label(header_frame, text="Step 3: Review Duplicates", font=("Helvetica", 16, "bold")).pack(side=tk.LEFT)
         
-        # Use Frame with grid layout for fixed sections (non-resizable)
         main_content_frame = ttk.Frame(frame)
-        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)        # Configure grid layout with fixed preview width
-        main_content_frame.grid_columnconfigure(0, weight=1)  # Flexible width for duplicates
-        main_content_frame.grid_columnconfigure(1, weight=0, minsize=PREVIEW_PANE_WIDTH)  # Fixed width for preview
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        main_content_frame.grid_columnconfigure(0, weight=1)
+        main_content_frame.grid_columnconfigure(1, weight=0, minsize=PREVIEW_PANE_WIDTH)
         main_content_frame.grid_rowconfigure(0, weight=1)
         
-        # Left section for duplicates grid
         grid_container = ttk.Frame(main_content_frame)
         grid_container.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         
-        # Right section for preview - fixed width
         self.results_preview_pane = self._create_preview_pane(main_content_frame)
         self.results_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
 
@@ -614,163 +518,205 @@ class DuplicateFinderWizard:
         results_header.pack(fill='x', pady=5, padx=5)
         ttk.Button(results_header, text="Select All Duplicates", command=lambda: self.set_all_checkboxes(True)).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(results_header, text="Deselect All", command=lambda: self.set_all_checkboxes(False)).pack(side=tk.LEFT)
-        self.results_status_label = ttk.Label(results_header, text=" ", foreground="blue") # Use a space to reserve height
+        self.results_status_label = ttk.Label(results_header, text=" ", foreground="blue")
         self.results_status_label.pack(side=tk.LEFT, padx=20)
         
         self.canvas_scroll_frame = tk.Canvas(grid_container, bg=self.bg_colour, highlightthickness=0)
-        
-        # Make the scrollbar an instance variable to check its position
         self.results_scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.canvas_scroll_frame.yview)
+        
+        # This frame acts as a spacer to define the total scrollable height
         self.results_grid_frame = ttk.Frame(self.canvas_scroll_frame)
         self.canvas_scroll_frame.create_window((0, 0), window=self.results_grid_frame, anchor="nw")
-        self.canvas_scroll_frame.configure(yscrollcommand=self.results_scrollbar.set)
         
+        # Link scrollbar and canvas, and hook our update function into the scroll command
+        self.canvas_scroll_frame.config(yscrollcommand=lambda *args: self.results_scrollbar.set(*args) or self._on_results_scroll())
+
         self.canvas_scroll_frame.pack(side="left", fill="both", expand=True)
         self.results_scrollbar.pack(side="right", fill="y")
         
-        self.results_grid_frame.bind("<Configure>", lambda e: self.canvas_scroll_frame.configure(scrollregion=self.canvas_scroll_frame.bbox("all")))
+        # Re-calculate layout on resize
+        self.canvas_scroll_frame.bind("<Configure>", lambda e: self.root.after_idle(self.prepare_virtualized_results, True))
         self.canvas_scroll_frame.bind_all("<MouseWheel>", self._on_mousewheel)
-        
-        # Add binding for when the user drags the scrollbar
-        self.results_scrollbar.bind("<ButtonRelease-1>", lambda e: self._check_scroll_and_load())
-        
+
         footer = ttk.Frame(frame)
         footer.pack(fill='x', pady=20, padx=20)
         ttk.Button(footer, text="Delete Selected Files 🗑️", style="Accent.TButton", command=self.start_deletion).pack(side=tk.RIGHT)
         
         return frame
         
-    def _check_scroll_and_load(self):
-        """Check if the scrollbar is at the bottom and load more groups if so."""
-        if self.is_loading_groups:
-            return
-            
-        # Get scrollbar position (top_fraction, bottom_fraction)
-        top, bottom = self.results_scrollbar.get()
-        
-        # If the bottom of the scrollbar is at or near the end, load more
-        if bottom >= 1.0:
-            self.load_more_groups()
-            
-    def _check_final_scroll_and_load(self):
-        """Check if the final report scrollbar is at the bottom and load more items if so."""
-        if self.is_loading_kept_files:
-            return
-
-        top, bottom = self.final_scrollbar.get()
-        
-        if bottom >= 1.0:
-            self.load_more_kept_items()
-
     def _on_mousewheel(self, event):
         active_canvas = None
-        # Determine which canvas and scroll check to use based on the current screen
+        scroll_func = None
+
         if self.current_screen == self.screens['results']:
             active_canvas = self.canvas_scroll_frame
-            scroll_check_func = self._check_scroll_and_load
+            scroll_func = self._on_results_scroll
         elif self.current_screen == self.screens['final_report']:
             active_canvas = self.final_canvas
-            scroll_check_func = self._check_final_scroll_and_load
-        else:
-            return # No scrollable canvas on other screens
+            scroll_func = self._on_final_report_scroll
 
         if active_canvas:
-            active_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            # Give Tkinter a moment to process the scroll before checking the position
-            self.root.after(20, scroll_check_func)
+            active_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if scroll_func:
+                scroll_func()
 
-    def build_results_grid(self):
-        """
-        Sets up the results view for lazy loading.
-        It clears previous results and loads the first batch of groups.
-        """
-        self.thumbnail_widgets = {} 
-        for widget in self.results_grid_frame.winfo_children():
-            widget.destroy()
-        self.checkbox_vars.clear()
+    def _on_results_scroll(self, *args):
+        """Called on any scroll action on the results canvas. Schedules a widget update."""
+        self.root.after_idle(self._update_visible_groups)
 
-        # Set up state for lazy loading
-        self.group_keys = list(self.duplicate_groups.keys())
-        self.displayed_groups_count = 0
-        self.is_loading_groups = False
-        self.select_all_state = False # Reset select all state
+    def prepare_virtualized_results(self, re_layout=False):
+        """Pre-calculates the layout and height of all groups to set up the virtualized view."""
+        if not re_layout:
+            self.group_keys = list(self.duplicate_groups.keys())
+            self.checkbox_vars.clear()
+            self.select_all_state = False
+
+        for widget_id in self.active_group_widgets.values():
+            self.canvas_scroll_frame.delete(widget_id)
+        self.active_group_widgets.clear()
         
-        # Load the first batch of groups
-        self.load_more_groups()
+        self.group_layout_info.clear()
+        current_y = 0
         
-    def load_more_groups(self):
-        """Loads the next batch of duplicate groups into the results view."""
-        # Check if we are already loading or if all groups are loaded
-        if self.is_loading_groups or self.displayed_groups_count >= len(self.group_keys):
-            return
+        container_width = self.canvas_scroll_frame.winfo_width()
+        if container_width <= 1: container_width = 800
+        
+        # Fixed height for one row of items inside a group frame
+        ITEM_ROW_HEIGHT = (THUMBNAIL_SIZE[1] + 80) + 10 # (Fixed Item Frame Height) + grid pady
+        
+        # Width of one item including padding
+        ITEM_WIDTH = (THUMBNAIL_SIZE[0] + 10) + 10 # (Fixed Item Frame width) + grid padx
 
-        self.is_loading_groups = True
+        max_cols = max(1, container_width // ITEM_WIDTH)
+        
+        GROUP_HEADER_HEIGHT = 40 # Estimated height for the LabelFrame border and text
+        GROUP_MARGIN = 15 # Consistent margin between groups
 
-        start_index = self.displayed_groups_count
-        end_index = min(start_index + self.GROUP_LOAD_BATCH_SIZE, len(self.group_keys))
-
-        # Get the keys for the current batch
-        keys_to_load = self.group_keys[start_index:end_index]
-
-        # Build the UI for these groups
-        for i, hash_val in enumerate(keys_to_load):
-            current_group_index = start_index + i
-            paths = self.duplicate_groups[hash_val]
+        for key in self.group_keys:
+            paths = self.duplicate_groups[key]
+            num_rows = (len(paths) + max_cols - 1) // max_cols
+            group_height = (num_rows * ITEM_ROW_HEIGHT) + GROUP_HEADER_HEIGHT
             
-            group_frame = ttk.LabelFrame(self.results_grid_frame, text=f"Group {current_group_index + 1} ({len(paths)} items)")
-            group_frame.pack(fill='x', expand=True, padx=10, pady=10)
+            # The 'y' position is the running total before adding the current group
+            self.group_layout_info.append({'y': current_y, 'height': group_height, 'key': key})
+            
+            # Increment the running total for the *next* group's position
+            current_y += group_height + GROUP_MARGIN
 
-            container_width = self.results_grid_frame.winfo_width()
-            if container_width <= 1: container_width = 800 # Fallback for initial load
-            max_cols = max(1, container_width // (THUMBNAIL_SIZE[0] + 20))
+        total_height = current_y
+        self.results_grid_frame.config(height=total_height, width=1)
+        self.canvas_scroll_frame.config(scrollregion=(0, 0, container_width, total_height))
+        self._update_visible_groups()
 
-            for j, filepath in enumerate(paths):
-                row, col = divmod(j, max_cols)
-                
-                item_frame = ttk.Frame(group_frame, padding=5)
-                item_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
-                
-                is_original = (j == 0)  # First item in each group is the original
-                
-                if is_original:
-                    original_label = tk.Label(item_frame, text="Original", fg='black', font=('Arial', 9))
-                    original_label.pack(pady=2)
-                    thumb_bg = 'gray'
-                    thumb_relief = 'raised'
-                else:
-                    # Initialize the checkbox state based on the global select_all_state
-                    var = tk.BooleanVar(value=self.select_all_state)
-                    checkbox = ttk.Checkbutton(item_frame, variable=var)
-                    checkbox.pack()
-                    
-                    thumb_bg = 'gray'
-                    thumb_relief = 'raised'
-                    
-                    self.checkbox_vars[filepath] = var
-                
-                thumb_label = tk.Label(item_frame, bg=thumb_bg, relief=thumb_relief, width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
-                thumb_label.pack(pady=5)
-                thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
-                self.thumbnail_widgets[filepath] = thumb_label
+    def _update_visible_groups(self):
+        """The core of virtualization: creates/destroys widgets based on scroll position."""
+        canvas_height = self.canvas_scroll_frame.winfo_height()
+        scroll_region = self.canvas_scroll_frame.cget('scrollregion')
+        if not scroll_region: return
+        
+        try:
+            total_height = int(scroll_region.split(' ')[3])
+        except (ValueError, IndexError):
+            total_height = 0
 
-                filename_label = ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0])
-                filename_label.pack()
-                
-                if filepath in self.audio_processing_issues:
-                    issue_text = self.audio_processing_issues[filepath]
-                    if len(issue_text) > 50:
-                        issue_text = issue_text[:47] + "..."
-                    issue_label = tk.Label(item_frame, text=f"⚠️ {issue_text}", fg='orange', font=('Arial', 8), wraplength=THUMBNAIL_SIZE[0])
-                    issue_label.pack(pady=(2, 0))
-                
-                threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+        if total_height == 0: return
 
-        # Update the count of displayed groups and unlock loading
-        self.displayed_groups_count = end_index
-        self.is_loading_groups = False
+        view_top = self.canvas_scroll_frame.yview()[0] * total_height
+        view_bottom = view_top + canvas_height
+        
+        buffer = canvas_height
+        render_top = max(0, view_top - buffer)
+        render_bottom = min(total_height, view_bottom + buffer)
+        
+        visible_keys = {
+            info['key'] for info in self.group_layout_info 
+            if info['y'] + info['height'] > render_top and info['y'] < render_bottom
+        }
+        
+        rendered_keys = set(self.active_group_widgets.keys())
+        to_create = visible_keys - rendered_keys
+        to_destroy = rendered_keys - visible_keys
 
-        # Allow the UI to update before the next potential scroll check
-        self.root.update_idletasks()
+        for key in to_destroy:
+            widget_id = self.active_group_widgets.pop(key, None)
+            if widget_id:
+                try:
+                    # Retrieve the widget's path name from the canvas item
+                    win_path = self.canvas_scroll_frame.itemcget(widget_id, "-window")
+                    # First, remove the item from the canvas
+                    self.canvas_scroll_frame.delete(widget_id)
+                    if win_path:
+                        # Then, destroy the actual widget
+                        self.canvas_scroll_frame.nametowidget(win_path).destroy()
+                except tk.TclError:
+                    # This can happen if the widget is already gone, which is fine.
+                    pass
+
+            for path in self.duplicate_groups.get(key, [])[1:]:
+                 self.checkbox_vars.pop(path, None)
+            for path in self.duplicate_groups.get(key, []):
+                 self.thumbnail_widgets.pop(path, None)
+
+        for key in to_create:
+            info = next((i for i in self.group_layout_info if i['key'] == key), None)
+            if info:
+                group_widget = self._create_group_widget(key)
+                widget_id = self.canvas_scroll_frame.create_window(0, info['y'], window=group_widget, anchor="nw")
+                self.active_group_widgets[key] = widget_id
+
+    def _create_group_widget(self, key):
+        """Creates the widget for a single duplicate group with a fixed, predictable layout."""
+        paths = self.duplicate_groups[key]
+        group_index = self.group_keys.index(key)
+        
+        group_frame = ttk.LabelFrame(self.canvas_scroll_frame, text=f"Group {group_index + 1} ({len(paths)} items)")
+
+        container_width = self.canvas_scroll_frame.winfo_width()
+        if container_width <= 1: container_width = 800
+
+        ITEM_WIDTH = (THUMBNAIL_SIZE[0] + 10) + 10
+        max_cols = max(1, container_width // ITEM_WIDTH)
+
+        for j, filepath in enumerate(paths):
+            row, col = divmod(j, max_cols)
+            
+            # This frame has a fixed size to ensure consistent row heights
+            item_frame = ttk.Frame(group_frame, padding=5)
+            item_frame.config(width=THUMBNAIL_SIZE[0] + 10, height=THUMBNAIL_SIZE[1] + 80)
+            item_frame.pack_propagate(False) # Prevent children from changing the frame's size
+            item_frame.grid(row=row, column=col, padx=5, pady=5, sticky='n')
+            
+            is_original = (j == 0)
+            
+            if is_original:
+                tk.Label(item_frame, text="Original", fg='black', font=('Arial', 9)).pack(pady=2)
+            else:
+                var = tk.BooleanVar(value=self.select_all_state)
+                ttk.Checkbutton(item_frame, variable=var).pack()
+                self.checkbox_vars[filepath] = var
+            
+            thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
+            thumb_label.pack(pady=5)
+            thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
+            self.thumbnail_widgets[filepath] = thumb_label
+
+            # Truncate long filenames to prevent layout issues
+            filename = os.path.basename(filepath)
+            if len(filename) > 25: # Heuristic for what fits well
+                filename = filename[:11] + "..." + filename[-11:]
+            filename_label = ttk.Label(item_frame, text=filename, anchor="center")
+            filename_label.pack(fill='x', expand=True, pady=2)
+            
+            if filepath in self.audio_processing_issues:
+                issue_text = self.audio_processing_issues[filepath]
+                # Truncate issue text as well
+                if len(issue_text) > 20: issue_text = issue_text[:17] + "..."
+                issue_label = tk.Label(item_frame, text=f"⚠️ {issue_text}", fg='orange', font=('Arial', 8))
+                issue_label.pack(pady=(0, 2))
+            
+            threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+        
+        return group_frame
 
     def on_thumbnail_click(self, filepath):
         if self.active_media_player:
@@ -792,13 +738,11 @@ class DuplicateFinderWizard:
         if ext == '.gif':
             preview_widgets['gif_controls'].pack(fill='x', pady=5)
             self.active_media_player = GifPlayer(filepath, preview_widgets['canvas'], preview_widgets['gif_play'])
-            # Autoplay GIF
             self.active_media_player.toggle_play_pause()
         elif ext in VIDEO_EXTENSIONS:
             preview_widgets['video_controls'].pack(fill='x', pady=5)
             preview_widgets['seek'].set(0)
             self.active_media_player = VideoPlayerCV(filepath, preview_widgets)
-            # Autoplay video
             self.active_media_player.toggle_play_pause()
         elif ext in IMAGE_EXTENSIONS:
             self.display_image_preview(filepath, preview_widgets['canvas'])
@@ -806,18 +750,12 @@ class DuplicateFinderWizard:
     def display_image_preview(self, filepath, canvas):
         try:
             img = Image.open(filepath)
-            # Get canvas dimensions for responsive sizing
-            canvas.update_idletasks()  # Ensure canvas dimensions are updated
+            canvas.update_idletasks()
             canvas_width = canvas.winfo_width()
             canvas_height = canvas.winfo_height()
             
-            # Use canvas dimensions if available, otherwise fallback to PREVIEW_SIZE
-            if canvas_width > 1 and canvas_height > 1:
-                # Add some padding to ensure image fits well within canvas
-                max_size = (canvas_width - 20, canvas_height - 20)
-            else:
-                max_size = PREVIEW_SIZE
-                
+            max_size = (canvas_width - 20, canvas_height - 20) if canvas_width > 1 and canvas_height > 1 else PREVIEW_SIZE
+            
             img.thumbnail(max_size, Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             canvas.delete("all")
@@ -828,150 +766,101 @@ class DuplicateFinderWizard:
             canvas.create_text(canvas.winfo_width()/2, canvas.winfo_height()/2, text="Preview not available", fill="red")
 
     def is_solid_color_image(self, img, threshold=0.85):
-        """
-        Check if an image is mostly a solid color (like all black).
-        Returns True if more than threshold% of pixels are the same color.
-        Optimized for thumbnail-sized images.
-        
-        Args:
-            img: PIL Image object
-            threshold: Float between 0-1. Default 0.85 means 85% of pixels must be same color
-        """
         try:
-            # Convert to numpy array for faster processing
             img_array = np.array(img)
-            
-            # For very small images (thumbnails), check all pixels
             height, width = img_array.shape[:2]
             total_pixels = height * width
             
-            # Simple approach: check if image is mostly one color
-            if len(img_array.shape) == 2:  # Grayscale
+            if len(img_array.shape) == 2:
                 unique_values, counts = np.unique(img_array, return_counts=True)
-                max_count = np.max(counts)
-            else:  # Color image (RGB/RGBA)
-                # Convert to grayscale to simplify detection of "black" or solid colors
-                if img_array.shape[-1] >= 3:  # RGB or RGBA
-                    # Convert to grayscale using standard weights
-                    gray = np.dot(img_array[...,:3], [0.2989, 0.5870, 0.1140])
-                    unique_values, counts = np.unique(gray.astype(np.uint8), return_counts=True)
-                    max_count = np.max(counts)
-                else:
-                    # Single channel, treat as grayscale
-                    unique_values, counts = np.unique(img_array, return_counts=True)
-                    max_count = np.max(counts)
-            
-            # Check if the most common color takes up more than threshold% of the image
+            elif img_array.shape[-1] >= 3:
+                gray = np.dot(img_array[...,:3], [0.2989, 0.5870, 0.1140])
+                unique_values, counts = np.unique(gray.astype(np.uint8), return_counts=True)
+            else:
+                unique_values, counts = np.unique(img_array, return_counts=True)
+                
+            max_count = np.max(counts)
             dominant_ratio = max_count / total_pixels
             
-            # Additional check: if the most common color is very dark (likely black/near-black)
-            # be more aggressive in detecting it as solid color
             if len(unique_values) > 0:
-                most_common_idx = np.argmax(counts)
-                most_common_value = unique_values[most_common_idx]
-                
-                # If most common color is very dark (0-30 on 0-255 scale), lower the threshold
-                if most_common_value <= 30:  # Very dark colors
-                    return dominant_ratio > 0.75  # Lower threshold for dark colors
-                else:
-                    return dominant_ratio > threshold
+                most_common_value = unique_values[np.argmax(counts)]
+                if most_common_value <= 30:
+                    return dominant_ratio > 0.75
             
             return dominant_ratio > threshold
-            
-        except Exception:            # If analysis fails, assume it's not solid color (safer default)
+        except Exception:
             return False
 
     def load_thumbnail(self, filepath, label):
         try:
+            # Check if the widget still exists before processing
+            if not label.winfo_exists():
+                return
+                
             ext = os.path.splitext(filepath)[1].lower()
             if ext in IMAGE_EXTENSIONS:
                 img = Image.open(filepath)
             elif ext in VIDEO_EXTENSIONS:
-                # Suppress OpenCV error messages
                 cv2.setLogLevel(0)
-                
                 cap = cv2.VideoCapture(filepath)
-                if not cap.isOpened():
-                    raise Exception("Could not open video file")
+                if not cap.isOpened(): raise Exception("Could not open video file")
                 
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 if total_frames <= 0:
                     cap.release()
                     raise Exception("Video has no frames")
                 
-                # Try to get the first frame
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = cap.read()
                 if not ret:
                     cap.release()
                     raise Exception("Could not read first video frame")
                 
-                # Convert frame to PIL Image for solid color checking
                 first_frame_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 
-                # Check if the first frame is mostly solid color
-                is_solid = self.is_solid_color_image(first_frame_img)
-                
-                if is_solid and total_frames > 1:
-                    # Try multiple positions to find a better frame
-                    frame_positions = [
-                        total_frames // 4,      # 25% into video
-                        total_frames // 2,      # 50% into video  
-                        total_frames * 3 // 4,  # 75% into video
-                    ]
-                    
+                if self.is_solid_color_image(first_frame_img) and total_frames > 1:
+                    frame_positions = [total_frames // 4, total_frames // 2, total_frames * 3 // 4]
                     best_frame = first_frame_img
-                    
                     for pos in frame_positions:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
                         ret, frame = cap.read()
                         if ret:
                             candidate_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                            # Use the first frame that's not solid color
                             if not self.is_solid_color_image(candidate_img):
                                 best_frame = candidate_img
                                 break
-                    
                     img = best_frame
                 else:
-                    # First frame is fine, use it
                     img = first_frame_img
                 
                 cap.release()
             
             img.thumbnail(THUMBNAIL_SIZE, Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
-            self.root.after(0, lambda: label.config(image=photo, width=0, height=0))
-            label.image = photo 
-        except Exception as e:
-            # For debugging, you can uncomment the next line to see errors
-            # print(f"Thumbnail error for {os.path.basename(filepath)}: {e}")
-            self.root.after(0, lambda: label.config(text="Error", bg="red"))
+            
+            # Check widget existence again before updating UI from thread
+            if label.winfo_exists():
+                self.root.after(0, lambda: label.config(image=photo, width=0, height=0))
+                label.image = photo 
+        except Exception:
+            if label.winfo_exists():
+                self.root.after(0, lambda: label.config(text="Error", bg="red"))
 
     def set_all_checkboxes(self, value):
-        """Sets the state for all duplicate checkboxes, including those not yet rendered."""
         self.select_all_state = bool(value)
-        # Update only the checkboxes that have already been created
         for var in self.checkbox_vars.values():
             var.set(self.select_all_state)
 
     def start_deletion(self):
-        """Builds the list of files to delete based on the 'select all' state and any manual changes."""
         files_to_delete_set = set()
     
         if self.select_all_state:
-            # Start with all possible duplicates if "Select All" is active
             all_duplicates = {path for group in self.duplicate_groups.values() for path in group[1:]}
-            
-            # Find rendered items that were manually unchecked by the user
             unchecked_rendered_items = {
                 path for path, var in self.checkbox_vars.items() if not var.get()
             }
-            
-            # The final set to delete is all duplicates MINUS the ones the user manually unchecked
             files_to_delete_set = all_duplicates - unchecked_rendered_items
-            
-        else: # "Select All" is not active, so only manually checked items count
+        else:
             files_to_delete_set = {
                 path for path, var in self.checkbox_vars.items() if var.get()
             }
@@ -991,7 +880,6 @@ class DuplicateFinderWizard:
         frame = ttk.Frame(self.root)
         ttk.Label(frame, text="Step 4: Deleting Files...", font=("Helvetica", 16, "bold")).pack(pady=20)
         
-        # Overall progress section
         overall_label_frame = ttk.Frame(frame)
         overall_label_frame.pack(pady=5)
         ttk.Label(overall_label_frame, text="Overall Progress", font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
@@ -1008,29 +896,28 @@ class DuplicateFinderWizard:
     def delete_thread(self):
         all_files = [p for group in self.duplicate_groups.values() for p in group]
         self.kept_files = [p for p in all_files if p not in self.files_to_delete]
+        self.kept_files.sort(key=lambda path: self.get_file_creation_time(path))
+
 
         total = len(self.files_to_delete)
         self.delete_overall_progress_bar['maximum'] = 100
         
         for i, path in enumerate(self.files_to_delete):
-            overall_percentage = (i / total) * 100
+            overall_percentage = (i / max(1, total)) * 100
             
-            # Show file starting to be deleted
             self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                          self.update_delete_status(f"Deleting ({n+1}/{total}): {os.path.basename(p)}", op))
+                self.update_delete_status(f"Deleting ({n+1}/{total}): {os.path.basename(p)}", op))
             
             try:
                 os.remove(path)
-                # Show successful deletion
-                overall_percentage = ((i + 1) / total) * 100
+                overall_percentage = ((i + 1) / max(1, total)) * 100
                 self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                              self.update_delete_status(f"Deleted ({n+1}/{total}): {os.path.basename(p)}", op))
+                    self.update_delete_status(f"Deleted ({n+1}/{total}): {os.path.basename(p)}", op))
             except OSError:
-                # Show failed deletion (still counts as complete)
-                overall_percentage = ((i + 1) / total) * 100
+                overall_percentage = ((i + 1) / max(1, total)) * 100
                 self.root.after(0, lambda p=path, n=i, op=overall_percentage: 
-                              self.update_delete_status(f"Failed to delete ({n+1}/{total}): {os.path.basename(p)}", op))
-                          
+                    self.update_delete_status(f"Failed to delete ({n+1}/{total}): {os.path.basename(p)}", op))
+                                
         self.root.after(0, self.on_delete_complete)
 
     def update_delete_status(self, text, overall_percentage):
@@ -1039,21 +926,18 @@ class DuplicateFinderWizard:
         self.delete_overall_percentage.config(text=f"{overall_percentage:.1f}%")
 
     def on_delete_complete(self):
-        self.build_final_report_grid()
+        self.prepare_virtualized_final_report()
         self.show_screen("final_report")
 
-    # --- Screen 5: Final Report ---
-    
+    # --- Screen 5: Final Report (VIRTUALIZED) ---
     def _create_preview_pane(self, parent):
         preview_frame = ttk.LabelFrame(parent, text="Preview (no audio)")
-        # Set minimum width constraint
         preview_frame.configure(width=PREVIEW_PANE_WIDTH)
-        preview_frame.pack_propagate(False)  # Maintain size constraints
+        preview_frame.pack_propagate(False)
 
         preview_canvas = tk.Canvas(preview_frame, bg="black", width=PREVIEW_PANE_WIDTH, height=200,)
         preview_canvas.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
         
-        # Video controls
         vid_controls = ttk.Frame(preview_frame)
         vid_play_btn = ttk.Button(vid_controls, text="▶", command=self.toggle_play_pause)
         vid_time_label = ttk.Label(vid_controls, text="00:00 / 00:00")
@@ -1062,38 +946,27 @@ class DuplicateFinderWizard:
         vid_time_label.pack(side=tk.RIGHT, padx=5)
         vid_seek_bar.pack(side=tk.LEFT, expand=True, fill='x')
         
-        # GIF controls
         gif_controls = ttk.Frame(preview_frame)
         gif_play_btn = ttk.Button(gif_controls, text="❚❚ Pause", command=self.toggle_play_pause)
         gif_play_btn.pack()
 
-        return {
-            "frame": preview_frame,
-            "canvas": preview_canvas,
-            "video_controls": vid_controls,
-            "gif_controls": gif_controls,
-            "play": vid_play_btn,
-            "seek": vid_seek_bar,
-            "time_label": vid_time_label,
-            "gif_play": gif_play_btn
-        }
+        return {"frame": preview_frame, "canvas": preview_canvas, "video_controls": vid_controls,
+                "gif_controls": gif_controls, "play": vid_play_btn, "seek": vid_seek_bar,
+                "time_label": vid_time_label, "gif_play": gif_play_btn}
 
     def create_final_report_screen(self):
         frame = ttk.Frame(self.root)
         ttk.Label(frame, text="Deletion Complete: Kept Items", font=("Helvetica", 16, "bold")).pack(pady=20)
         
-        # Use Frame with grid layout for fixed sections (non-resizable)
         main_content_frame = ttk.Frame(frame)
-        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)        # Configure grid layout with fixed preview width
-        main_content_frame.grid_columnconfigure(0, weight=1)  # Flexible width for kept items
-        main_content_frame.grid_columnconfigure(1, weight=0, minsize=PREVIEW_PANE_WIDTH)  # Fixed width for preview
+        main_content_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        main_content_frame.grid_columnconfigure(0, weight=1)
+        main_content_frame.grid_columnconfigure(1, weight=0, minsize=PREVIEW_PANE_WIDTH)
         main_content_frame.grid_rowconfigure(0, weight=1)
         
-        # Left section for kept items grid
         grid_container = ttk.Frame(main_content_frame)
         grid_container.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         
-        # Right section for preview - fixed width
         self.final_report_preview_pane = self._create_preview_pane(main_content_frame)
         self.final_report_preview_pane['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
         
@@ -1101,70 +974,125 @@ class DuplicateFinderWizard:
         self.final_scrollbar = ttk.Scrollbar(grid_container, orient="vertical", command=self.final_canvas.yview)
         self.final_grid_frame = ttk.Frame(self.final_canvas)
         self.final_canvas.create_window((0, 0), window=self.final_grid_frame, anchor="nw")
-        self.final_canvas.configure(yscrollcommand=self.final_scrollbar.set)
         
+        self.final_canvas.config(yscrollcommand=lambda *args: self.final_scrollbar.set(*args) or self._on_final_report_scroll())
+
         self.final_canvas.pack(side="left", fill="both", expand=True)
         self.final_scrollbar.pack(side="right", fill="y")
-        self.final_grid_frame.bind("<Configure>", lambda e: self.final_canvas.configure(scrollregion=self.final_canvas.bbox("all")))
-        self.final_scrollbar.bind("<ButtonRelease-1>", lambda e: self._check_final_scroll_and_load())
-
+        self.final_canvas.bind("<Configure>", lambda e: self.root.after_idle(self.prepare_virtualized_final_report, True))
+        
         footer = ttk.Frame(frame)
         footer.pack(fill='x', pady=20, padx=20)
         ttk.Button(footer, text="Done ✔", style="Accent.TButton", command=self.close_app).pack(side=tk.RIGHT)
         
         return frame
 
-    def build_final_report_grid(self):
-        self.thumbnail_widgets = {}
-        for widget in self.final_grid_frame.winfo_children():
-            widget.destroy()
+    def _on_final_report_scroll(self, *args):
+        self.root.after_idle(self._update_visible_kept_files)
 
-        # Set up state for lazy loading
-        self.displayed_kept_files_count = 0
-        self.is_loading_kept_files = False
+    def prepare_virtualized_final_report(self, re_layout=False):
+        """Pre-calculates the layout for the final report's virtualized grid view."""
+        for widget_id in self.active_kept_file_widgets.values():
+            self.final_canvas.delete(widget_id)
+        self.active_kept_file_widgets.clear()
         
-        # Load the first batch of items
-        self.load_more_kept_items()
-
-    def load_more_kept_items(self):
-        """Loads the next batch of kept items into the final report view."""
-        if self.is_loading_kept_files or self.displayed_kept_files_count >= len(self.kept_files):
-            return
-
-        self.is_loading_kept_files = True
-
-        start_index = self.displayed_kept_files_count
-        end_index = min(start_index + self.KEPT_FILES_LOAD_BATCH_SIZE, len(self.kept_files))
-
-        files_to_load = self.kept_files[start_index:end_index]
+        self.kept_files_layout_info.clear()
         
-        container_width = self.final_grid_frame.winfo_width()
-        if container_width <= 1: container_width = 800 # Fallback
-        max_cols = max(1, container_width // (THUMBNAIL_SIZE[0] + 20))
+        container_width = self.final_canvas.winfo_width()
+        if container_width <= 1: container_width = 800
         
-        for i, filepath in enumerate(files_to_load):
-            # Calculate grid position based on the total number of items already displayed
-            total_index = start_index + i
-            row, col = divmod(total_index, max_cols)
-            
-            item_frame = ttk.Frame(self.final_grid_frame, padding=5)
-            item_frame.grid(row=row, column=col, padx=5, pady=5)
-            
-            thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
-            thumb_label.pack(pady=5)
-            thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
-            self.thumbnail_widgets[filepath] = thumb_label # Store reference
-            
-            ttk.Label(item_frame, text=os.path.basename(filepath), wraplength=THUMBNAIL_SIZE[0]).pack()
-            threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+        # Calculate sizes based on the fixed-size widgets we will create
+        ITEM_WIDTH = (THUMBNAIL_SIZE[0] + 10) + 10  # Frame width + grid padx
+        ITEM_HEIGHT = (THUMBNAIL_SIZE[1] + 50) + 10 # Frame height + grid pady
+        max_cols = max(1, container_width // ITEM_WIDTH)
+        
+        # Calculate position for each item
+        for i, filepath in enumerate(self.kept_files):
+            row = i // max_cols
+            col = i % max_cols
+            item_x = col * ITEM_WIDTH
+            item_y = row * ITEM_HEIGHT
+            self.kept_files_layout_info.append({'x': item_x, 'y': item_y, 'path': filepath})
+        
+        # Calculate total height for the scroll region
+        num_rows = (len(self.kept_files) + max_cols - 1) // max_cols
+        total_height = num_rows * ITEM_HEIGHT
 
-        self.displayed_kept_files_count = end_index
-        self.is_loading_kept_files = False
+        self.final_grid_frame.config(height=total_height, width=1)
+        self.final_canvas.config(scrollregion=(0, 0, container_width, total_height))
+        self._update_visible_kept_files()
 
-        self.root.update_idletasks()
+    def _update_visible_kept_files(self):
+        """Creates/destroys kept file widgets based on scroll position."""
+        canvas_height = self.final_canvas.winfo_height()
+        scroll_region = self.final_canvas.cget('scrollregion')
+        if not scroll_region: return
+        
+        try:
+            total_height = int(scroll_region.split(' ')[3])
+        except (ValueError, IndexError):
+            total_height = 0
+            
+        if total_height == 0: return
 
+        view_top = self.final_canvas.yview()[0] * total_height
+        view_bottom = view_top + canvas_height
+        
+        buffer = canvas_height
+        render_top = max(0, view_top - buffer)
+        render_bottom = min(total_height, view_bottom + buffer)
+
+        ITEM_HEIGHT = (THUMBNAIL_SIZE[1] + 50) + 10
+        visible_paths = {
+            info['path'] for info in self.kept_files_layout_info 
+            if info['y'] + ITEM_HEIGHT > render_top and info['y'] < render_bottom
+        }
+
+        rendered_paths = set(self.active_kept_file_widgets.keys())
+        to_create = visible_paths - rendered_paths
+        to_destroy = rendered_paths - visible_paths
+
+        for path in to_destroy:
+            widget_id = self.active_kept_file_widgets.pop(path, None)
+            if widget_id:
+                try:
+                    win_path = self.final_canvas.itemcget(widget_id, "-window")
+                    self.final_canvas.delete(widget_id)
+                    if win_path:
+                        self.final_canvas.nametowidget(win_path).destroy()
+                except tk.TclError:
+                    pass
+
+            self.thumbnail_widgets.pop(path, None)
+
+        for path in to_create:
+            info = next((i for i in self.kept_files_layout_info if i['path'] == path), None)
+            if info:
+                item_widget = self._create_kept_file_widget(path)
+                widget_id = self.final_canvas.create_window(info['x'], info['y'], window=item_widget, anchor="nw")
+                self.active_kept_file_widgets[path] = widget_id
+
+    def _create_kept_file_widget(self, filepath):
+        """Creates a single item widget for the final report with a fixed size."""
+        item_frame = ttk.Frame(self.final_canvas, padding=5)
+        item_frame.config(width=THUMBNAIL_SIZE[0] + 10, height=THUMBNAIL_SIZE[1] + 50)
+        item_frame.pack_propagate(False) # Enforce the fixed size
+        
+        thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
+        thumb_label.pack(pady=5)
+        thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
+        self.thumbnail_widgets[filepath] = thumb_label
+        
+        # Truncate filename to fit
+        filename = os.path.basename(filepath)
+        if len(filename) > 25:
+            filename = filename[:11] + "..." + filename[-11:]
+        ttk.Label(item_frame, text=filename, anchor="center").pack(fill='x', expand=True, pady=2)
+        threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
+
+        return item_frame
+        
     def close_app(self):
-        """Close the application"""
         if self.active_media_player:
             self.active_media_player.stop()
         self.root.quit()
@@ -1182,28 +1110,15 @@ class DuplicateFinderWizard:
         if self.active_media_player: self.active_media_player.toggle_play_pause()
     def seek_video(self, value):
         if isinstance(self.active_media_player, VideoPlayerCV): self.active_media_player.seek(float(value))
-            
-    # --- UI Helpers ---
-    def show_transient_message(self, text):
-        self.results_status_label.config(text=text)
-
-    def hide_transient_message(self):
-        self.results_status_label.config(text=" ")
-
+        
     def get_file_creation_time(self, filepath):
-        """Get file creation time, fallback to modification time if creation time is not available"""
         try:
-            # On Windows, st_ctime is creation time; on Unix, it's last metadata change time
-            # st_mtime is modification time on all platforms
             stat = os.stat(filepath)
-            if os.name == 'nt':  # Windows
+            if os.name == 'nt':
                 return stat.st_ctime
-            else:  # Unix-like systems
-                # Use the earlier of creation time (if available) or modification time
+            else:
                 return min(getattr(stat, 'st_birthtime', stat.st_mtime), stat.st_mtime)
         except (OSError, AttributeError):
-            # If we can't get the creation time, return a default value (current time)
-            # This ensures the sorting still works even if there are file access issues
             return time.time()
 
 
@@ -1224,17 +1139,12 @@ class GifPlayer:
             for frame in ImageSequence.Iterator(self.image):
                 duration = frame.info.get('duration', 100) / 1000.0
                 resized_frame = frame.copy()
-                # Get canvas dimensions for responsive sizing
                 canvas.update_idletasks()
                 canvas_width = canvas.winfo_width()
                 canvas_height = canvas.winfo_height()
                 
-                # Use canvas dimensions if available, otherwise fallback to PREVIEW_SIZE
-                if canvas_width > 1 and canvas_height > 1:
-                    max_size = (canvas_width - 20, canvas_height - 20)
-                else:
-                    max_size = PREVIEW_SIZE
-                    
+                max_size = (canvas_width - 20, canvas_height - 20) if canvas_width > 1 and canvas_height > 1 else PREVIEW_SIZE
+                
                 resized_frame.thumbnail(max_size, Image.LANCZOS)
                 self.frames.append((ImageTk.PhotoImage(resized_frame), duration))
             self.frame_index = 0
@@ -1243,7 +1153,7 @@ class GifPlayer:
             self.frames = []
 
     def show_frame(self):
-        if not self.frames: return
+        if not self.frames or not self.canvas.winfo_exists(): return
         photo = self.frames[self.frame_index][0]
         self.canvas.delete("all")
         self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, anchor='center', image=photo)
@@ -1253,7 +1163,8 @@ class GifPlayer:
             if self.is_playing and self.frames:
                 self.frame_index = (self.frame_index + 1) % len(self.frames)
                 photo, delay = self.frames[self.frame_index]
-                self.canvas.after(0, self.show_frame)
+                if self.canvas.winfo_exists():
+                    self.canvas.after(0, self.show_frame)
                 time.sleep(delay)
             else:
                 time.sleep(0.1)
@@ -1307,19 +1218,15 @@ class VideoPlayerCV:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     def show_frame(self, frame):
+        if not self.canvas.winfo_exists(): return
         try:
             img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            # Get canvas dimensions for responsive sizing
             self.canvas.update_idletasks()
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
             
-            # Use canvas dimensions if available, otherwise fallback to PREVIEW_SIZE
-            if canvas_width > 1 and canvas_height > 1:
-                max_size = (canvas_width - 20, canvas_height - 20)
-            else:
-                max_size = PREVIEW_SIZE
-                
+            max_size = (canvas_width - 20, canvas_height - 20) if canvas_width > 1 and canvas_height > 1 else PREVIEW_SIZE
+            
             img.thumbnail(max_size, Image.LANCZOS)
             self.photo_img = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
@@ -1336,14 +1243,15 @@ class VideoPlayerCV:
                 if not ret:
                     self.stop()
                     break
-                self.canvas.after(0, self.show_frame, frame)
+                if self.canvas.winfo_exists():
+                    self.canvas.after(0, self.show_frame, frame)
                 time.sleep(delay)
             else:
                 time.sleep(0.1)
 
     def update_loop(self):
-        if self.is_stopped: return
-        current_frame = 0  # Initialize with default value
+        if self.is_stopped or not self.canvas.winfo_exists(): return
+        current_frame = 0
         with self.lock:
             if self.ensure_capture_open():
                 current_frame = self.cap.get(cv2.CAP_PROP_POS_FRAMES)
@@ -1359,7 +1267,6 @@ class VideoPlayerCV:
     def toggle_play_pause(self):
         self.is_playing = not self.is_playing
         if self.is_playing:
-            # Ensure capture is open before starting playback
             with self.lock:
                 if not self.ensure_capture_open():
                     self.is_playing = False
@@ -1381,17 +1288,41 @@ class VideoPlayerCV:
             if not self.is_playing:
                 ret, frame = self.cap.read()
                 if ret: self.canvas.after(0, self.show_frame, frame)
+
     def stop(self):
         self.is_stopped = True
         self.is_playing = False
-        if hasattr(self, 'play_button'): self.play_button.config(text="▶")
+        if hasattr(self, 'play_button') and self.play_button.winfo_exists(): self.play_button.config(text="▶")
         with self.lock:
             if self.cap.isOpened(): self.cap.release()
 
     def ensure_capture_open(self):
-        """Ensure video capture is open, reopen if necessary"""
         if not self.cap.isOpened():
             self.cap = cv2.VideoCapture(self.filepath)
-            if not self.cap.isOpened():
-                return False
+            return self.cap.isOpened()
         return True
+
+# --- Main Execution ---
+if __name__ == "__main__":
+    root = tk.Tk()
+    
+    # Configure a modern theme
+    style = ttk.Style(root)
+    if "clam" in style.theme_names():
+        style.theme_use("clam")
+    
+    # Custom styling
+    style.configure("Accent.TButton", font=("Helvetica", 12, "bold"), foreground="white", background="#0078D7")
+    style.map("Accent.TButton",
+              background=[('active', '#005a9e')],
+              foreground=[('active', 'white')])
+    style.configure("TLabelFrame.Label", font=("Helvetica", 11, "bold"))
+    
+    app = DuplicateFinderWizard(root)
+    
+    # Handle window close gracefully
+    def on_closing():
+        app.close_app()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
