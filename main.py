@@ -159,11 +159,11 @@ def get_audio_hash(filepath, hash_size=8):
                     # Create a basic signature from video properties
                     fallback_signature = f"fallback_{int(duration)}_{int(fps)}_unknown"
                     fallback_hash = hash(fallback_signature) % (10**8)
-                    return str(fallback_hash), "Failed to process audio"
+                    return str(fallback_hash), "Audio error"
                 else:
-                    return "opencv_error", "Failed to process audio - OpenCV error"
+                    return "opencv_error", "Audio error - OpenCV error"
             except Exception:
-                return "fallback_error", "Failed to process audio - fallback error"
+                return "fallback_error", "Audio error - fallback error"
         else:
             # Thread completed, get the result
             try:
@@ -184,9 +184,9 @@ def get_audio_hash(filepath, hash_size=8):
                             fallback_hash = hash(fallback_signature) % (10**8)
                             return str(fallback_hash), f"Audio processing failed - used video metadata fallback ({issue})"
                         else:
-                            return "opencv_error", "Failed to process audio - OpenCV error"
+                            return "opencv_error", "Audio error - OpenCV error"
                     except Exception:
-                        return "fallback_error", "Failed to process audio - fallback error"
+                        return "fallback_error", "Audio error - fallback error"
             except queue.Empty:
                 return "thread_error", "Audio processing failed - no result available"
             
