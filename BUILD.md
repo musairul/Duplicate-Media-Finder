@@ -25,7 +25,7 @@ If you prefer to build manually:
 
 2. **Build executable:**
    ```bash
-   uv run pyinstaller --onefile --windowed --name "DuplicateMediaFinder" --clean app.py
+   uv run pyinstaller --onefile --windowed --name "DuplicateMediaFinder" --clean main.py
    ```
 
 ## Output
@@ -60,8 +60,7 @@ The `DuplicateMediaFinder.exe` file in the `dist` folder is completely standalon
 
 ```
 img-video-dup-finder/
-├── app.py                    # Entry point for the application
-├── main.py                   # Main application code
+├── main.py                    # Entry point for the application
 ├── pyproject.toml           # Project configuration and dependencies
 ├── build_exe.ps1            # PowerShell build script
 ├── build_exe.bat            # Batch build script

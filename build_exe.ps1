@@ -25,12 +25,13 @@ uv run pyinstaller `
     --hidden-import=tkinter `
     --hidden-import=scipy.signal `
     --clean `
-    app.py
+    main.py
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Build complete! Executable can be found in the dist folder." -ForegroundColor Green
     Write-Host "File location: dist\DuplicateMediaFinder.exe" -ForegroundColor Cyan
-} else {
+}
+else {
     Write-Host "Build failed!" -ForegroundColor Red
     exit 1
 }

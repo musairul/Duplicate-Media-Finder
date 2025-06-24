@@ -46,7 +46,7 @@ A powerful desktop application for finding and removing duplicate images and vid
 ## 👾 Source Code
 
 - If you just want to use the app download the .exe file in the Releases tab. 
-- Otherwise, to run the source code, download `uv` for python and run `uv run app.py`. 
+- Otherwise, to run the source code, download `uv` for python and run `uv run main.py`. 
 - If you are on macOS/Linux the exe wont work so you will have to run the source code instead.
 
 ## 📄 License

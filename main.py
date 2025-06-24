@@ -71,7 +71,7 @@ def get_video_signature(filepath, hash_size=8, frames_to_compare=10):
             frame_indices = [total_frames // 2]  # Middle frame
         else:
             frame_indices = [int(i * (total_frames - 1) / (actual_frames_to_sample - 1)) 
-                           for i in range(actual_frames_to_sample)]
+                             for i in range(actual_frames_to_sample)]
         
         hashes = []
         for frame_idx in frame_indices:
@@ -193,6 +193,24 @@ def get_audio_hash(filepath, hash_size=8):
     except Exception as e:
         return "audio_error", f"Audio processing error: {type(e).__name__}"
 
+# --- UI Helper Functions ---
+def truncate_filename_with_ext(filename, max_len=20):
+    """Truncates a filename but always keeps the extension visible."""
+    if len(filename) <= max_len:
+        return filename
+    
+    name, ext = os.path.splitext(filename)
+
+    # If the extension is too long, we can't do much.
+    # Fallback to simple truncation from the end.
+    if len(ext) >= max_len - 3:
+        return filename[:max_len-3] + "..."
+
+    # The length available for the name part
+    name_len = max_len - len(ext) - 3
+    
+    return name[:name_len] + "..." + ext
+
 # --- Main Application Class (Wizard Style) ---
 class DuplicateFinderWizard:
     def __init__(self, root):
@@ -294,9 +312,9 @@ class DuplicateFinderWizard:
         self.frames_slider.pack(padx=10, pady=(0, 10))
         
         help_text = ttk.Label(settings_frame, 
-                              text="More frames = more accurate detection but slower processing\n"
-                                   "Fewer frames = faster processing but may miss some duplicates",
-                              font=("Helvetica", 9), foreground="gray")
+                               text="More frames = more accurate detection but slower processing\n"
+                                    "Fewer frames = faster processing but may miss some duplicates",
+                               font=("Helvetica", 9), foreground="gray")
         help_text.pack(padx=10, pady=(0, 10))
         
         return frame
@@ -700,10 +718,8 @@ class DuplicateFinderWizard:
             thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
             self.thumbnail_widgets[filepath] = thumb_label
 
-            # Truncate long filenames to prevent layout issues
-            filename = os.path.basename(filepath)
-            if len(filename) > 25: # Heuristic for what fits well
-                filename = filename[:11] + "..." + filename[-11:]
+            # Truncate long filenames, keeping the extension visible
+            filename = truncate_filename_with_ext(os.path.basename(filepath))
             filename_label = ttk.Label(item_frame, text=filename, anchor="center")
             filename_label.pack(fill='x', expand=True, pady=2)
             
@@ -1083,10 +1099,8 @@ class DuplicateFinderWizard:
         thumb_label.bind("<Button-1>", lambda e, p=filepath: self.on_thumbnail_click(p))
         self.thumbnail_widgets[filepath] = thumb_label
         
-        # Truncate filename to fit
-        filename = os.path.basename(filepath)
-        if len(filename) > 25:
-            filename = filename[:11] + "..." + filename[-11:]
+        # Truncate filename to fit, keeping the extension visible
+        filename = truncate_filename_with_ext(os.path.basename(filepath))
         ttk.Label(item_frame, text=filename, anchor="center").pack(fill='x', expand=True, pady=2)
         threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
 

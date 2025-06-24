@@ -20,7 +20,7 @@ uv run pyinstaller ^
     --hidden-import=tkinter ^
     --hidden-import=scipy.signal ^
     --clean ^
-    app.py
+    main.py
 
 echo Build complete! Executable can be found in the dist folder.
 pause
