@@ -209,6 +209,10 @@ def truncate_filename_with_ext(filename, max_len=20):
     # The length available for the name part
     name_len = max_len - len(ext) - 3
     
+    # Ensure name_len is not negative
+    if name_len < 0:
+        return "..." + ext[-max_len+3:]
+
     return name[:name_len] + "..." + ext
 
 # --- Main Application Class (Wizard Style) ---
@@ -228,6 +232,7 @@ class DuplicateFinderWizard:
         self.active_media_player = None
         self.frames_to_compare = 10
         self.audio_processing_issues = {}
+        self.files_selected_for_deletion = set() # Persistent selection state
 
         # --- Virtualized Scrolling State ---
         self.group_keys = []
@@ -235,7 +240,6 @@ class DuplicateFinderWizard:
         self.active_group_widgets = {}
         self.kept_files_layout_info = []
         self.active_kept_file_widgets = {}
-        self.select_all_state = False
         self.thumbnail_widgets = {}
 
         # --- Screens ---
@@ -379,6 +383,11 @@ class DuplicateFinderWizard:
         if not self.scan_directories:
             messagebox.showwarning("No Folders", "Please add at least one folder to scan.")
             return
+
+        # Reset selections from any previous scan
+        self.files_selected_for_deletion.clear()
+        self.checkbox_vars.clear()
+
         self.show_screen("scanning")
         threading.Thread(target=self.scan_thread, daemon=True).start()
 
@@ -587,7 +596,6 @@ class DuplicateFinderWizard:
         if not re_layout:
             self.group_keys = list(self.duplicate_groups.keys())
             self.checkbox_vars.clear()
-            self.select_all_state = False
 
         for widget_id in self.active_group_widgets.values():
             self.canvas_scroll_frame.delete(widget_id)
@@ -709,8 +717,13 @@ class DuplicateFinderWizard:
             if is_original:
                 tk.Label(item_frame, text="Original", fg='black', font=('Arial', 9)).pack(pady=2)
             else:
-                var = tk.BooleanVar(value=self.select_all_state)
-                ttk.Checkbutton(item_frame, variable=var).pack()
+                # The checkbox state is now determined by our persistent set
+                is_selected = filepath in self.files_selected_for_deletion
+                var = tk.BooleanVar(value=is_selected)
+                # The command updates the persistent set when the checkbox is toggled
+                cb = ttk.Checkbutton(item_frame, variable=var, 
+                                     command=lambda p=filepath, v=var: self.on_checkbox_toggle(p, v))
+                cb.pack()
                 self.checkbox_vars[filepath] = var
             
             thumb_label = tk.Label(item_frame, bg='gray', relief='raised', width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
@@ -733,6 +746,13 @@ class DuplicateFinderWizard:
             threading.Thread(target=self.load_thumbnail, args=(filepath, thumb_label), daemon=True).start()
         
         return group_frame
+
+    def on_checkbox_toggle(self, filepath, var):
+        """Callback to update the selection set when a checkbox is clicked."""
+        if var.get():
+            self.files_selected_for_deletion.add(filepath)
+        else:
+            self.files_selected_for_deletion.discard(filepath)
 
     def on_thumbnail_click(self, filepath):
         if self.active_media_player:
@@ -862,26 +882,26 @@ class DuplicateFinderWizard:
             if label.winfo_exists():
                 self.root.after(0, lambda: label.config(text="Error", bg="red"))
 
-    def set_all_checkboxes(self, value):
-        self.select_all_state = bool(value)
-        for var in self.checkbox_vars.values():
-            var.set(self.select_all_state)
+    def set_all_checkboxes(self, select_all):
+        """Updates the master selection set and all visible checkboxes."""
+        if select_all:
+            all_duplicates = {
+                path
+                for group in self.duplicate_groups.values()
+                for path in group[1:]  # only duplicates, not originals
+            }
+            self.files_selected_for_deletion.update(all_duplicates)
+        else:
+            self.files_selected_for_deletion.clear()
+
+        # Update the currently visible checkboxes to reflect the change
+        for path, var in self.checkbox_vars.items():
+            var.set(path in self.files_selected_for_deletion)
 
     def start_deletion(self):
-        files_to_delete_set = set()
-    
-        if self.select_all_state:
-            all_duplicates = {path for group in self.duplicate_groups.values() for path in group[1:]}
-            unchecked_rendered_items = {
-                path for path, var in self.checkbox_vars.items() if not var.get()
-            }
-            files_to_delete_set = all_duplicates - unchecked_rendered_items
-        else:
-            files_to_delete_set = {
-                path for path, var in self.checkbox_vars.items() if var.get()
-            }
-
-        self.files_to_delete = list(files_to_delete_set)
+        """Starts the deletion process using the persistent selection set."""
+        # The set is now the single source of truth.
+        self.files_to_delete = list(self.files_selected_for_deletion)
         
         if not self.files_to_delete:
             messagebox.showwarning("No Selection", "No files selected for deletion.")
